@@ -1,0 +1,49 @@
+{
+  "about": {
+    "version": "1.0"
+  },
+
+  "ears": {
+    "help": {
+      "model":          "choices: tiny, base, small, medium, large. large is always multilingual",
+      "multilingual":   "don't use the english only model.",
+      "mic_energy_min": "threshold for audio to be recorded. too low is bad.",
+      "record_timeout": "time in seconds before silence triggers stop recording chunk",
+      "phrase_timeout": "time in seconds before silence triggers chunks to be output as phrase",
+      "mic_device":     "default microphone name for SpeechRecognition. options are listed at startup."
+    },
+    "model": "medium",
+    "multilingual": false,
+    "mic_energy_min": 1000,
+    "record_timeout": 1.0,
+    "phrase_timeout": 2.0,
+    "mic_device": "ReSpeaker 4 Mic Array (UAC1.0): USB Audio (hw:4,0)"
+  },
+
+  "voice": {
+    "help": {
+      "robotize_voice": "apply post processing to tts to add robotic distortion",
+      "voice_name": "Voice name from aws polly. Matthew, Justin,..."
+    },
+    "voice_name": "Matthew",
+    "robotize_voice": true
+  },
+
+  "identity": {
+    "textid":"anglerbot0256",
+    "uuid": "b8810c47-bfcb-4819-b91d-40f2fcd4463a",
+    "name": "Kevin",
+    "aliases": ["Kevinator", "Mr. Kevin"]
+  },
+
+  "keychain": {
+    "aws": {
+      "AWS_ACCESS_KEY_ID":"env",
+      "AWS_SECRET_ACCESS_KEY":"env"
+    },
+    "openai": {
+      "OPENAI_API_KEY": "env"
+    }
+  }
+
+}
