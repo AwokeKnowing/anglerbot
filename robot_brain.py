@@ -38,6 +38,9 @@ class Brain:
 
             # Create a queue for the messages
             self.robot_queues["/hearing/in/statements"] = mp.Queue()
+            self.robot_queues["/language/out/chat"] = mp.Queue()
+            self.robot_queues["/language/in/chat"] = mp.Queue()
+            self.robot_queues["/voice/out/chat"] = mp.Queue()
 
             # Create a process for the worker function
             hearing_process = mp.Process(target=robot_hearing.start, args=(config,self.robot_queues["/hearing/in/statements"]))
