@@ -5,6 +5,7 @@ import speech_recognition as sr
 import time
 import sounddevice  #gets rid of all the ALSA messages printed to console (just importing it does that)
 import copy
+import io
 
 
 def start(config, messages_queue):
@@ -38,9 +39,9 @@ def start(config, messages_queue):
 
     def transcribe(queue, recognizer, audio, mic):
         try:
-            audio2 = copy.deepcopy(audio)
+            #audio2 = copy.deepcopy(audio)
             print("transcribing")
-            text = r.recognize_google(audio2,key=None, language="en-US", pfilter=1,show_all=False, with_confidence=False)
+            text = r.recognize_google(audio,key=None,language="en-US",pfilter=1,show_all=False,with_confidence=False)
             if len(text):
                 queue.put(text)
         except sr.UnknownValueError:
@@ -57,7 +58,7 @@ def start(config, messages_queue):
             print("Kevin is listening...")
             with mic as source:audio = r.listen(source, timeout=20,phrase_time_limit=12)
 
-            transcriber = threading.Thread(target=transcribe, args=(messages_queue, r, audio, mic))
+            transcriber = threading.Thread(target=transcribe, args=(messages_queue, r, io.BytesIO(audio.get_wav_data()), mic))
             transcriber.start()
         
         except sr.WaitTimeoutError:
