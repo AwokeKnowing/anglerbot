@@ -3,7 +3,7 @@ import simpleaudio as sa
 
 import robot_voice_effect
 
-robot=True
+robot=False
 voice="Matthew"
 
 polly = boto3.client('polly', region_name='us-west-2')
@@ -20,19 +20,24 @@ def speak(text):
             response = polly.synthesize_speech(Text=text, TextType="ssml", OutputFormat="pcm",VoiceId=voice, SampleRate="16000") #the input to sampleRate is a string value.
         else:
              #Calling Polly synchronous API with text type as plain text
-            response = polly.synthesize_speech(Text=text, TextType="text", OutputFormat="pcm",VoiceId=voice, SampleRate="16000")
-    except (BotoCoreError, ClientError) as error:
+            response = polly.synthesize_speech(Text=text, TextType="text", OutputFormat="pcm",VoiceId=voice, SampleRate="16000",Engine="neural")
+    except (boto3.BotoCoreError, boto3.ClientError) as error:
         print(error)
         
     #print(response)
     #Processing the response to audio stream
     stream = response.get("AudioStream")
-    frames.append(stream.read())
-
+    audio=stream
     if robot:
-        frames = robot_voice_effect.from_pcm(frames)
-    
-    audio= b''.join(frames)
+        frames.append(stream.read())
 
-    play_obj = sa.play_buffer(audio, 1, 2, 16000)
-    play_obj.wait_done()#robot shouldn't ever play more than one voice at once
+        if robot:
+            frames = robot_voice_effect.from_pcm(frames)
+        
+        audio= b''.join(frames)
+
+        play_obj = sa.play_buffer(audio, 1, 2, 16000)
+        play_obj.wait_done()#robot shouldn't ever play more than one voice at once
+    else:
+        play_obj = sa.play_buffer(audio.read(), 1, 2, 16000)
+        play_obj.wait_done()#robot shouldn't ever play more than one voice at once

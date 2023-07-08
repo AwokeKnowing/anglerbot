@@ -12,12 +12,12 @@
       "phrase_timeout": "time in seconds before silence triggers chunks to be output as phrase",
       "mic_device":     "default microphone name for SpeechRecognition. options are listed at startup."
     },
-    "model": "medium",
+    "model": "base",
     "multilingual": false,
     "mic_energy_min": 1000,
     "record_timeout": 1.0,
     "phrase_timeout": 2.0,
-    "mic_device": "ReSpeaker 4 Mic Array (UAC1.0): USB Audio (hw:4,0)"
+    "mic_device": "ReSpeaker 4 Mic Array (UAC1.0): USB Audio (hw:2,0)"
   },
 
   "voice": {
@@ -26,7 +26,7 @@
       "voice_name": "Voice name from aws polly. Matthew, Justin,..."
     },
     "voice_name": "Matthew",
-    "robotize_voice": true
+    "robotize_voice": false
   },
 
   "identity": {
