@@ -1,17 +1,9 @@
 import boto3
 import robot_voice_effect
-import time
-import simpleaudio as sa
+import simpleaudio as sa #must be imported in process that uses
 
-def start(config, wf):
-    axon = wf.axon(
-        in_topics=[
-            '/voice/statement'
-        ],
-        out_topics=[
-
-        ]
-    )
+def start(config, rq):
+    
     robot=False
     voice="Matthew"
 
@@ -19,7 +11,7 @@ def start(config, wf):
     #text = "<speak>Hi! I'm Matthew. Hope you are doing well. This is a sample PCM to WAV conversion for SSML. I am a Neural voice and have a conversational style. </speak>" # Input in SSML
 
     while True:
-        text = axon['/voice/statement'].get()
+        text = rq['/voice/statement'].get()
         frames = []
         try:
             if "<speak>" in text: #Checking for SSML input
@@ -36,7 +28,7 @@ def start(config, wf):
         #Processing the response to audio stream
         stream = response.get("AudioStream")
         audio=stream
-
+        print("audio", repr(audio))
         if robot:
             frames.append(stream.read())
 
@@ -48,9 +40,5 @@ def start(config, wf):
             play_obj = sa.play_buffer(audio, 1, 2, 16000)
             play_obj.wait_done()#robot shouldn't ever play more than one voice at once
         else:
-            #audio=audio.read()
-            #print(bytes)
             play_obj = sa.play_buffer(audio.read(), 1, 2, 16000)
             play_obj.wait_done()#robot shouldn't ever play more than one voice at once
-        
-        time.sleep(.01)

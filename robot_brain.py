@@ -2,9 +2,11 @@
 
 import argparse
 import multiprocessing as mp
+import threading
 import time
 
 import cowsay
+import whitematter
 
 import robot_hearing
 import robot_language
@@ -12,53 +14,58 @@ import robot_voice
 import robot_config
 
 
-
 class Brain:
 
-    robot_queues = {
-        "/hearing/in/statements": None,
-        "/language/out/chat": None,
-        "/language/in/chat": None,
-        "/voice/out/speech": None
+    robot_queue_types = {
+        "/hearing/statement": "string",
+        "/language/chat/in/statement": "string",
+        "/language/chat/out/statement": "string",
+        "/voice/statement": "string",
     }
 
-    is_being_addressed=False
-    robot_asked_question=False
-    def get_words_addressed_to_robot(self, words, name='kevin', before=8):
-        try:
-            name_index = words.index(name)
-            start_index = max(0, name_index - before)
-            return words[start_index:]
-        except ValueError:
-            return []
+    robot_processors = {
+        "robot_hearing": robot_hearing.start,
+        "robot_language": robot_language.start,
+        "robot_voice": robot_voice.start,
+    }
 
     def wake(self):
         with robot_config.Configuration("robot_config.json") as config:
-        
+            self.is_being_addressed=False
+            self.robot_asked_question=False
 
-            # Create a queue for the messages
-            self.robot_queues["/hearing/in/statements"] = mp.Queue()
-            self.robot_queues["/language/out/chat"] = mp.Queue()
-            self.robot_queues["/language/in/chat"] = mp.Queue()
-            self.robot_queues["/voice/out/chat"] = mp.Queue()
+            self.whiteFiber = whitematter.WhiteFiber(self.robot_queue_types.keys())
 
-            # Create a process for the worker function
-            hearing_process = mp.Process(target=robot_hearing.start, args=(config,self.robot_queues["/hearing/in/statements"]))
-            hearing_process.start()
+            self.axon=self.whiteFiber.axon(
+                in_topics=[
+                    "/hearing/statement",
+                    "/language/chat/out/statement"
+                ],
+                out_topics=[
+                    "/language/chat/in/statement",
+                    "/voice/statement"
+                ]
+
+            )
+            
+            
+
+            # Create a process for the worker functions
+            for pname, pstart in self.robot_processors.items():
+                self.robot_processors[pname] = threading.Thread(target=pstart, args=(config,self.whiteFiber), daemon=True)
+                self.robot_processors[pname].start()
 
             # Read messages from the queue
             while True:
                 try:
                     # Block until a message is available in the queue
-                    print("waiting for statement")
-                    message = self.robot_queues["/hearing/in/statements"].get()
-                    print("got statement")
+                    message = self.axon["/hearing/statement"].get()
+                    
                     # Do something with the message
                     if len(message)>0 and message != " " and message != ".":
                         cowsay.cow(message)
                     if message.lower().startswith("turn yourself off") and len(message)<19:
                         cowsay.cow("Goodbye!")
-                        hearing_process.terminate()
                         break
 
                     words = ''.join([c for c in message if c not in '¡!¿?,.']).lower().split()
@@ -66,19 +73,24 @@ class Brain:
                     words_to_robot = self.get_words_addressed_to_robot(words)
                     if len(words_to_robot) > 1 or self.robot_asked_question:
                         print("Thinking...")
-                        response = robot_language.add_spoken_message(message) 
+                        self.axon["/language/chat/in/statement"].put(message)
+                        response = self.axon["/language/chat/out/statement"].get()
                         
-                        if response["type"] == "speakable":
-                            self.robot_asked_question = response['content'][-1]=="?"
-                            cowsay.tux(response["content"])
-                            robot_voice.speak(response["content"])
-                    
-                    
+                        self.robot_asked_question = response[-1]=="?"
+                        cowsay.tux(response)
+                        self.axon['/voice/statement'].put(response)
+                        
                 except KeyboardInterrupt:
                         cowsay.cow("Goodbye!")
-                        hearing_process.terminate()
                         break
 
+    def get_words_addressed_to_robot(self, words, name='kevin', before=8):
+        try:
+            name_index = words.index(name)
+            start_index = max(0, name_index - before)
+            return words[start_index:]
+        except ValueError:
+            return []
 
 
 if __name__ == "__main__":

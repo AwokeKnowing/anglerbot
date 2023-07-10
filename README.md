@@ -7,7 +7,7 @@ To install dependencies simply run
 ```
 python3 -m venv venv
 source venv/bin/activate
-sudo apt install python3-pyaudio portaudio19-dev ffmpeg
+sudo apt install python3-pyaudio portaudio19-dev ffmpeg flac
 pip install -r requirements.txt
 ```
 in an environment of your choosing.
@@ -17,16 +17,17 @@ For more information on Whisper please see https://github.com/openai/whisper
 
 The code in this repository is public domain.
 
-
-        sense   (sensor input)
-      perceive  (deep learning encode)
-    emote    (calculate internal low level motivations like battery, connect, help )
-  concern       (attention over world model with possible futures)
-trust         (core policy. score futures. select goal)
-  act     (evaluate actions to acheive goal)
-    try      (select behavior)
-      orchestrate    (track progress and emit actions)
+```
+        sense     (sensor input)
+      perceive    (deep learning encode)
+    emote         (calculate internal low level motivations like battery, connect, help )
+  concern         (attention over world model with possible futures)
+trust             (core policy. score futures. select goal)
+  act             (evaluate actions to acheive goal)
+    try           (select behavior)
+      orchestrate (track progress and emit actions)
         react     (actuators output)
+```
 
 
 def invert()

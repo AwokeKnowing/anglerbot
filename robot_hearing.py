@@ -8,13 +8,22 @@ import copy
 import io
 
 
-def start(config, messages_queue):
+def start(config, wf):
     source=None
     mic=None
+
+    axon=wf.axon(
+        in_topics=[
+
+        ],
+        out_topics=[
+            "/hearing/statement"
+        ]
+    )
     
     # obtain audio from the microphone
-    r = sr.Recognizer()
-    r.energy_threshold = config['ears.mic_energy_min']
+    recognizer = sr.Recognizer()
+    recognizer.energy_threshold = config['ears.mic_energy_min']
 
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramtically to a point where the SpeechRecognizer never stops recording.
     #r.dynamic_energy_threshold = False
@@ -37,13 +46,13 @@ def start(config, messages_queue):
 
     #with mic as source: r.adjust_for_ambient_noise(source)
 
-    def transcribe(queue, recognizer, audio, mic):
+    def transcribe(axon, recognizer, audio, mic):
         try:
-            #audio2 = copy.deepcopy(audio)
+            audio2 = copy.deepcopy(audio)
             print("transcribing")
-            text = r.recognize_google(audio,key=None,language="en-US",pfilter=1,show_all=False,with_confidence=False)
+            text = recognizer.recognize_google(audio2,key=None,language="en-US",pfilter=1,show_all=False,with_confidence=False)
             if len(text):
-                queue.put(text)
+                axon["/hearing/statement"].put(text)
         except sr.UnknownValueError:
             print("didn't understand")
             
@@ -56,13 +65,13 @@ def start(config, messages_queue):
     while True:
         try:
             print("Kevin is listening...")
-            with mic as source:audio = r.listen(source, timeout=20,phrase_time_limit=12)
+            with mic as source:audio = recognizer.listen(source, timeout=20,phrase_time_limit=12)
 
-            transcriber = threading.Thread(target=transcribe, args=(messages_queue, r, io.BytesIO(audio.get_wav_data()), mic))
+            transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio, mic))
             transcriber.start()
         
         except sr.WaitTimeoutError:
-            with mic as source: r.adjust_for_ambient_noise(source)
+            with mic as source: recognizer.adjust_for_ambient_noise(source)
             print("heard nothing")
 
         time.sleep(.01)
