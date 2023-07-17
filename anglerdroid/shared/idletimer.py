@@ -25,7 +25,7 @@ class IdleTimer:
                 continue
             
             elapsed_time = time.time() - self.last_update
-            print("idle", elapsed_time)
+            #print("idle", elapsed_time)
             if elapsed_time >= self.threshold:
                 if self.callback is not None:
                     self.callback()
