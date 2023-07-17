@@ -1,7 +1,9 @@
 import os
 import openai
+import time
 
-def start(config, wf):
+def start(config, whiteFiber, timeToStop):
+    print("starting language")
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     spoken_message_prompt = [
@@ -16,16 +18,22 @@ def start(config, wf):
 
     spoken_messages_history = []
 
-    while True:
-        axon = wf.axon(
-            [
-                "/language/chat/in/statement"
-            ],
-            [
-                "/language/chat/out/statement"
-            ]
-        )
+    axon = whiteFiber.axon(
+        get_topics=[
+            "/language/chat/in/statement"
+        ],
+        put_topics=[
+            "/language/chat/out/statement"
+        ]
+    )
+
+    print("language ready")
+    while not timeToStop.isSet():
+        time.sleep(.1)
         text = axon["/language/chat/in/statement"].get()
+        if text is None:
+            continue
+
         new_message = {"role": "user", "content": text}
 
         response = openai.ChatCompletion.create(
@@ -40,4 +48,6 @@ def start(config, wf):
         spoken_messages_history.append({"role": "assistant", "content": response_text})
 
         axon["/language/chat/out/statement"].put(response_text)
+    
+    print("stopped language")
         

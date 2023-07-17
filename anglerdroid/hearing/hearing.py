@@ -8,15 +8,16 @@ import copy
 import io
 
 
-def start(config, wf):
+def start(config, whiteFiber, timeToStop):
+    print("starting hearing")
     source=None
     mic=None
 
-    axon=wf.axon(
-        in_topics=[
+    axon = whiteFiber.axon(
+        get_topics = [
 
         ],
-        out_topics=[
+        put_topics = [
             "/hearing/statement"
         ]
     )
@@ -62,12 +63,13 @@ def start(config, wf):
         except sr.RequestError as e:
             print("Could not request results from Google Speech Recognition service; {0}".format(e))
 
-    while True:
+    print("hearing ready")
+    while not timeToStop.isSet():
         try:
             print("Kevin is listening...")
             with mic as source:audio = recognizer.listen(source, timeout=20,phrase_time_limit=12)
 
-            transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio, mic))
+            transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio, mic),daemon=True)
             transcriber.start()
         
         except sr.WaitTimeoutError:
@@ -75,3 +77,5 @@ def start(config, wf):
             print("heard nothing")
 
         time.sleep(.01)
+
+    print("stopped hearing")

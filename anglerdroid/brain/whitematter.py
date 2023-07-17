@@ -1,5 +1,6 @@
 import threading
 import time
+import queue
 from queue import Queue
 
 class WhiteFiber:
@@ -9,25 +10,25 @@ class WhiteFiber:
         self.get_queues = {topic:[] for topic in topics}      
         self.broadcast_thread = None
         
-    def axon(self, in_topics=None, out_topics=None, maxsize=1000):
-        if in_topics is None:
-            in_topics = []
+    def axon(self, get_topics=None, put_topics=None, maxsize=1000):
+        if get_topics is None:
+            get_topics = []
 
-        if out_topics is None:
-            out_topics = []
+        if put_topics is None:
+            put_topics = []
         
         # new queues broadcast messages to the new subscriber
-        get_queues = {topic: Queue(maxsize=1000) for topic in in_topics}
+        get_queues = {topic: Queue(maxsize=1000) for topic in get_topics}
 
         # selection of put queues to listen to
-        put_queues = {topic: self.put_queues[topic] for topic in out_topics}
+        put_queues = {topic: self.put_queues[topic] for topic in put_topics}
 
         # store the new queues for publishing
         for topic, q in get_queues.items():
             self.get_queues[topic].append(q)
 
         # might need to store them?        
-        subscriber = Subscriber(in_topics, out_topics, get_queues, put_queues)
+        subscriber = Subscriber(get_topics, put_topics, get_queues, put_queues)
 
         # start up the thread 
         if self.broadcast_thread is None:
@@ -81,8 +82,22 @@ class TopicProxy:
         #print("putting",data)
         return self.put_q.put(data)
 
-    def get(self):
-        return self.get_q.get()        
+    def get(self, block=False,throwOnEmpty=False):
+        if block:
+            return self.get_q.get()
+        
+        if throwOnEmpty:
+            return self.get_q.get(False)
+        else:
+            try:
+                return self.get_q.get(False)
+            except queue.Empty:
+                return None
+        
+
+
+    def get_nowait(self):
+        return self.get_q.get_nowait()         
    
 
 if __name__ == '__main__':
