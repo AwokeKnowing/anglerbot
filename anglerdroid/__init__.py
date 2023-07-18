@@ -8,6 +8,7 @@ from .language import language
 from .voice import voice
 from .gamepad import gamepad
 from .wheels import wheels
+from .vision import vision
 
 
 from .shared.config import Configuration

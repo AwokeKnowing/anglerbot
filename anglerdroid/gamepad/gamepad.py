@@ -274,7 +274,7 @@ def main():
         print("read all events")
         gamepad.process_events()
         
-def start(config, whiteFiber, timeToStop):
+def start(config, whiteFiber, brainSleeping):
     print("starting gamepad")
     axon = whiteFiber.axon(
         get_topics=[
@@ -288,7 +288,7 @@ def start(config, whiteFiber, timeToStop):
     gamepad.print_state=False # config
 
     print("gamepad ready")    
-    while not timeToStop.isSet():
+    while not brainSleeping.isSet():
         time.sleep(.1)
         vels_norm=gamepad.diffDrive()
         axon["/gamepad/diffdrive/leftrightvels"].put((vels_norm['left'],vels_norm['right']))

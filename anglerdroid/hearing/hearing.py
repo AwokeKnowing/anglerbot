@@ -8,7 +8,7 @@ import copy
 import io
 
 
-def start(config, whiteFiber, timeToStop):
+def start(config, whiteFiber, brainSleeping):
     print("starting hearing")
     source=None
     mic=None
@@ -25,6 +25,9 @@ def start(config, whiteFiber, timeToStop):
     # obtain audio from the microphone
     recognizer = sr.Recognizer()
     recognizer.energy_threshold = config['ears.mic_energy_min']
+    recognizer.dynamic_energy_ratio = 1.7
+    recognizer.dynamic_energy_adjustment_damping = 0.5
+    recognizer.dynamic_energy_threshold=False
 
     # Definitely do this, dynamic energy compensation lowers the energy threshold dramtically to a point where the SpeechRecognizer never stops recording.
     #r.dynamic_energy_threshold = False
@@ -47,7 +50,22 @@ def start(config, whiteFiber, timeToStop):
 
     #with mic as source: r.adjust_for_ambient_noise(source)
 
-    def transcribe(axon, recognizer, audio, mic):
+    def map_mic_energy(value):
+        old_min = 150
+        old_max = 800
+        new_min = 100
+        new_max = 10
+
+        # Calculate the normalized value within the old range
+        normalized_value = (value - old_min) / (old_max - old_min)
+
+        # Map the normalized value to the new range
+        new_value = new_min + (normalized_value * (new_max - new_min))
+
+        return int(new_value)
+
+
+    def transcribe(axon, recognizer, audio):
         try:
             audio2 = copy.deepcopy(audio)
             print("transcribing")
@@ -55,26 +73,43 @@ def start(config, whiteFiber, timeToStop):
             if len(text):
                 axon["/hearing/statement"].put(text)
         except sr.UnknownValueError:
-            print("didn't understand")
+            recognizer.energy_threshold = min(800, recognizer.energy_threshold+100)
             
-        except sr.exceptions.UnknownValueError:
-            print("really didn't understand")
+            #print("didn't understand")
             
         except sr.RequestError as e:
-            print("Could not request results from Google Speech Recognition service; {0}".format(e))
+            print("Could not request results from Speech Recognition service; {0}".format(e))    
+
+    """    
+        stop_hearing = recognizer.listen_in_background(
+            mic, 
+            lambda r, audio:transcribe(axon,r,audio),
+            phrase_time_limit=15)
+            
+        while not brainSleeping.isSet():
+            print("Kevin is listening...")    
+            time.sleep(1)
+
+        stop_hearing(True)
+        print("stopped hearing")
+    """
+    #mic energy should be 200 (silence) to 800 (air conditioner)
 
     print("hearing ready")
-    while not timeToStop.isSet():
+    while not brainSleeping.isSet():
         try:
-            print("Kevin is listening...")
-            with mic as source:audio = recognizer.listen(source, timeout=20,phrase_time_limit=12)
+            #print("Kevin is listening...")
+            print("mic level", str(map_mic_energy(recognizer.energy_threshold))+'%' )
+            with mic as source:audio = recognizer.listen(source, timeout=2,phrase_time_limit=15)
 
-            transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio, mic),daemon=True)
+            transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio),daemon=True)
             transcriber.start()
+            
         
         except sr.WaitTimeoutError:
-            with mic as source: recognizer.adjust_for_ambient_noise(source)
-            print("heard nothing")
+            #with mic as source: recognizer.adjust_for_ambient_noise(source)
+            #print("heard nothing")
+            recognizer.energy_threshold = max(150, recognizer.energy_threshold-20)
 
         time.sleep(.01)
 

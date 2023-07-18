@@ -4,7 +4,7 @@ import simpleaudio as sa
 
 from . import voice_effect
 
-def start(config, whiteFiber, timeToStop):
+def start(config, whiteFiber, brainSleeping):
     print("starting voice")
     axon = whiteFiber.axon(
         get_topics=[
@@ -21,7 +21,7 @@ def start(config, whiteFiber, timeToStop):
     #text = "<speak>Hi! I'm Matthew. Hope you are doing well. This is a sample PCM to WAV conversion for SSML. I am a Neural voice and have a conversational style. </speak>" # Input in SSML
 
     print("voice ready")
-    while not timeToStop.isSet():
+    while not brainSleeping.isSet():
         time.sleep(.1)
         text = axon['/voice/statement'].get()
         if text is None:

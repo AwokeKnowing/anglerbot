@@ -21,11 +21,13 @@ class Brain:
             "/voice/statement": "string",
             "/gamepad/diffdrive/leftrightvels":"tuple",
             "/wheels/diffdrive/leftrightvels":"tuple",
+            "/vision/images/topdown":"BGRImage"
         }
 
         self.sensors = {
             "hearing": a7.hearing.start,
             "gamepad": a7.gamepad.start,
+            "vision":  a7.vision.start,
         }
         self.actuators = {
             "voice": a7.voice.start,
@@ -37,7 +39,7 @@ class Brain:
 
         self.handlers = {}
 
-        self.timeToStop = threading.Event()
+        self.brainSleeping = threading.Event()
 
     def wake(self):
         print("waking up")
@@ -64,14 +66,14 @@ class Brain:
 
             # Create a process for the worker functions
             for pname, pstart in itertools.chain(self.sensors.items(),self.actuators.items(),self.processors.items()):
-                self.handlers[pname] = threading.Thread(target=pstart, args=(robotConfig,self.whiteFiber,self.timeToStop))
+                self.handlers[pname] = threading.Thread(target=pstart, args=(robotConfig,self.whiteFiber,self.brainSleeping))
                 self.handlers[pname].daemon = True
                 self.handlers[pname].start()
 
             cowsay.tux("Hello!")
 
             # Read messages from the queue
-            while not self.timeToStop.isSet():
+            while not self.brainSleeping.isSet():
                 try:
                     # Block until a message is available in the queue
                     message = self.axon["/hearing/statement"].get()
@@ -117,7 +119,7 @@ class Brain:
             cowsay.tux("Zzzz")
                     
     def shutdown(self):
-        self.timeToStop.set()
+        self.brainSleeping.set()
         time.sleep(5)
         for name,handler in self.handlers.items():
             if handler.isAlive():

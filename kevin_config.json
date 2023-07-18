@@ -14,7 +14,7 @@
     },
     "model": "base",
     "multilingual": false,
-    "mic_energy_min": 1000,
+    "mic_energy_min": 200,
     "record_timeout": 1.0,
     "phrase_timeout": 2.0,
     "mic_device": "ReSpeaker 4 Mic Array (UAC1.0): USB Audio (hw:2,0)"

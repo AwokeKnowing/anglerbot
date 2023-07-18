@@ -2,7 +2,7 @@ import os
 import openai
 import time
 
-def start(config, whiteFiber, timeToStop):
+def start(config, whiteFiber, brainSleeping):
     print("starting language")
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
@@ -28,7 +28,7 @@ def start(config, whiteFiber, timeToStop):
     )
 
     print("language ready")
-    while not timeToStop.isSet():
+    while not brainSleeping.isSet():
         time.sleep(.1)
         text = axon["/language/chat/in/statement"].get()
         if text is None:
