@@ -29,6 +29,15 @@
     "robotize_voice": false
   },
 
+  "vision": {
+    "help": {
+      "realsense_topdown_serial": "serial number of Realsense depthcam facing down",
+      "realsense_forward_serial": "serial number of Realsense dempthcam facing forward"
+    },
+    "realsense_topdown_serial": "815412070676",
+    "realsense_forward_serial": "815412070180"
+  },
+
   "identity": {
     "textid":"anglerdroid0256",
     "uuid": "bb8a2d20c-3d0b-4819-b91d-40f2fcd4463a",
