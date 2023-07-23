@@ -60,7 +60,7 @@ if __name__ == "__main__":
     #  different resolutions of color and depth streams
     config = rs.config()
     config.enable_device("815412070676")
-    config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 30)
+    config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
     config.enable_stream(rs.stream.color, 640, 480, rs.format.rgb8, 30)
 
     # Start streaming
@@ -91,7 +91,7 @@ if __name__ == "__main__":
     pcd = PointCloud()
     flip_transform = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 
-    
+    voxel_size=.075
 
     # Streaming loop
     frame_count = 0
@@ -126,7 +126,8 @@ if __name__ == "__main__":
             temp = open3d.geometry.PointCloud.create_from_rgbd_image(
                     rgbd_image, intrinsic)
             temp.transform(flip_transform)
-            temp=temp.voxel_down_sample(voxel_size=0.01)
+            
+            temp=temp.voxel_down_sample(voxel_size=voxel_size)
             
             #temp.orient_normals_consistent_tangent_plane(10)
             temp.estimate_normals()
@@ -146,7 +147,7 @@ if __name__ == "__main__":
                 obb=inpcd.get_oriented_bounding_box()
                 obb.color=(0, 1, 0)
                 R=obb.R
-                #print(R)
+                #print(R) #this can be backward because obb direction is random
                 sy = np.sqrt(R[0][0] * R[0][0] +  R[1][0] * R[1][0])
                 x = np.arctan2(R[2][1] , R[2][2])
                 y = np.arctan2(-R[2][0], sy)
@@ -156,7 +157,7 @@ if __name__ == "__main__":
                     x-=np.pi
                 if(x<-np.pi/2):
                     x+=np.pi
-                print(x,y)
+                #print(x,y)
                 R=open3d.geometry.get_rotation_matrix_from_zyx(np.array([z,y,x]))
                 inv_R = np.linalg.inv(R)
                 #print(inv_R)
@@ -177,6 +178,16 @@ if __name__ == "__main__":
             #pcd.estimate_normals()
 
             
+            vxgridb = open3d.geometry.VoxelGrid.create_from_point_cloud(pcd,voxel_size=voxel_size)
+
+            if frame_count==0:
+                vxgrid = vxgridb
+            #vxgrid.voxels=vxgridb.voxels
+                
+                
+
+            #vxgrid.(vxgridb.to_octree(200))
+            
             #open3d.visualization.draw([inlier_cloud, outlier_cloud])
              
 
@@ -187,21 +198,26 @@ if __name__ == "__main__":
 
             if frame_count ==0:
                 
-                vis.add_geometry(pcd)
+                #vis.add_geometry(pcd)
+                vis.add_geometry(vxgrid)
                 vis.add_geometry(axis_aligned_bounding_box)
                 #vis.renderer.set_normals(True)
                 #vis.add_geometry(obb)
 
             
 
-            vis.update_geometry(pcd)
+            #vis.update_geometry(pcd)
+            
+            vis.remove_geometry(vxgrid,False)
+            vxgrid=vxgridb
+            vis.add_geometry(vxgrid,False)
             vis.poll_events()
             vis.update_renderer()
 
             
 
             process_time = datetime.now() - dt0
-            #print("FPS: "+str(1/process_time.total_seconds()))
+            print("FPS: "+str(1/process_time.total_seconds()))
             frame_count += 1
 
     finally:
