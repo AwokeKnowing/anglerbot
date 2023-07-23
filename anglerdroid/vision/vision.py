@@ -1,6 +1,8 @@
 import numpy as np
 import cv2
-from .topdown import RealsenseTopdownCamera
+from .topdownrs import TopdownRealsenseCamera
+from .forwardrs import ForwardRealsenseCamera
+from .uppereye  import UpperEyeCamera
 
 def polar():
     center=(618,608)
@@ -35,7 +37,29 @@ def polar():
 
     cv2.waitKey(0)
 
+def fit_plane_ransac(points, threshold_distance, num_iterations):
+    best_plane = None
+    best_inliers = []
+    for _ in range(num_iterations):
+        # Randomly sample 3 points from the data
+        random_indices = np.random.choice(len(points), 3, replace=False)
+        random_points = points[random_indices]
 
+        # Fit a plane to the sampled points
+        plane = np.linalg.solve(random_points, np.ones(3))
+
+        # Calculate distances from all points to the plane
+        distances = np.abs(points @ plane) / np.linalg.norm(plane)
+
+        # Count inliers (points within the threshold distance to the plane)
+        inliers = points[distances < threshold_distance]
+
+        # Update best model if this iteration produced more inliers
+        if len(inliers) > len(best_inliers):
+            best_plane = plane
+            best_inliers = inliers
+
+    return best_plane, best_inliers
 
 
 def start(config, whiteFiber, brainSleeping):
@@ -54,13 +78,24 @@ def start(config, whiteFiber, brainSleeping):
     rs_forward_sn=config['vision.realsense_forward_serial']
     # Create a context object for the Intel RealSense camera
 
-    topdown=RealsenseTopdownCamera(config['vision.realsense_topdown_serial'])
+    topdownrs=TopdownRealsenseCamera(config['vision.realsense_topdown_serial'])
+    forwardrs=ForwardRealsenseCamera(config['vision.realsense_forward_serial'])
+    uppereyecam=UpperEyeCamera()
 
     print("vision ready")
     while not brainSleeping.isSet():
-        topdown_depth,topdown_mask,topdown_overlay,topdown_color=topdown.frame()
+        topdown_depth,topdown_mask,topdown_overlay,topdown_color,points=topdownrs.frame()
+        forward_depth,forward_mask,forward_overlay,forward_color=forwardrs.frame()
+        uppereye_color = uppereyecam.frame()
+
+
         
-        rcx,rcy= topdown.robot_center
+
+
+
+
+        
+        rcx,rcy= topdownrs.robot_center
         roi_fwd1_tl = (rcx-130, rcy-125)
         roi_fwd1_br = (rcx+130, rcy-75)
         roi_fwd2_tl = (rcx-130, rcy-175)
@@ -123,7 +158,10 @@ def start(config, whiteFiber, brainSleeping):
         # Display the ROI with the mask
         cv2.imshow('ROI with Mask', topdown_overlay)
         #cv2.imshow('ROI Mask', mask)
-        cv2.imshow('color', topdown_color)
+        cv2.imshow('topdown color', topdown_color)
+        cv2.imshow('forward color', forward_color)
+        cv2.imshow('forward depth', forward_depth)
+        cv2.imshow('uppereye color', uppereye_color)
 
         # Break the loop if 'q' is pressed
         cv2.waitKey(1)
@@ -131,7 +169,9 @@ def start(config, whiteFiber, brainSleeping):
         #    break
 
     # Stop the pipeline and close the camera
-    topdown.stop()
+    topdownrs.stop()
+    forwardrs.stop()
+    uppereyecam.stop()
 
     # Close all OpenCV windows
     cv2.destroyAllWindows()

@@ -2,7 +2,7 @@ import pyrealsense2 as rs
 import numpy as np
 import cv2
 
-class RealsenseTopdownCamera:
+class ForwardRealsenseCamera:
     
 
     # Define the region of interest (ROI) for plane estimation
@@ -108,10 +108,11 @@ class RealsenseTopdownCamera:
 
         cv2.circle(overlay, (self.rcx, self.rcy), 3, (0, 255, 0), -1)
 
-
+        topdownimg = cv2.rotate(topdownimg, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        color_image = cv2.rotate(color_image, cv2.ROTATE_90_COUNTERCLOCKWISE)
         return topdownimg,mask_accumulated,overlay,color_image
 
 
 if __name__ == '__main__':
-    topdown = RealsenseTopdownCamera("815412070676")
+    topdown = ForwardRealsenseCamera("815412070676")
     depth,mask,overlay,color=topdown.frame()

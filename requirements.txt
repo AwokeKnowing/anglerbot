@@ -9,3 +9,4 @@ cowsay
 boto3
 simpleaudio
 pyrealsense2
+open3d
