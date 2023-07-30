@@ -13,3 +13,4 @@ from .vision import vision
 
 from .shared.config import Configuration
 from .shared.idletimer import IdleTimer
+from .vision.realsense import RealsenseCamera
