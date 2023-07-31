@@ -346,8 +346,9 @@ if __name__ == "__main__":
                 floor_depth = cv2.morphologyEx(floor_depth, cv2.MORPH_CLOSE, morph_kernel)
                 #cv2.imshow('floor depth acc', floor_acc)
             
-            cv2.floodFill(floor_depth, None, (120,212), (0, 0, 0))
+            #cv2.floodFill(floor_depth, None, (120,212), (0, 0, 0))
             cv2.imshow('floor depth', floor_depth)
+            cv2.imwrite('botmask.png',floor_depth)
             cv2.waitKey(1)
 
             #cv2.imshow('floor depth', floor_depth)
