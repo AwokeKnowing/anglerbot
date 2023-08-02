@@ -9,9 +9,7 @@ class DynamicPathfinder:
         self.cm_between_wheels = cm_between_wheels
         self.px_per_cm = px_per_cm
 
-        self.current_left_vel = 0
-        self.current_right_vel = 0
-
+        self.current_vels = (0,0)
 
     def get_distance_factor(self, desired_length, radius):
         circumference = 2 * np.pi * radius
@@ -31,14 +29,15 @@ class DynamicPathfinder:
         return radius
     
 
-    def select_path(self, image, vels, distance_between_wheels,dist_factor):
+    def get_valid_paths(self, image, possible_vels, distance_between_wheels,dist_factor=4.5):
         #distance = 6  # in cm
 
         image_sum=np.sum(image)
         n=0
-        for vel in vels:
+        paths=[]
+        for vel in possible_vels:
             img=image.copy()
-
+            path={'vels':vel,'points':[]}
             
             v1 = vel[0]/100 * dist_factor
             v2 = vel[1]/100 * dist_factor
@@ -55,19 +54,25 @@ class DynamicPathfinder:
             pixel_y = (-y * 20 + 209).astype(int)
 
             r=68
+            points = list(zip(pixel_x, pixel_y))
             # Plot points on the image
-            for px, py in zip(pixel_x, pixel_y):
-                cv2.circle(img, (px,py), 68, (0, 0,0), -1)
+            
+            for px, py in points:
+                # black filled circle traces path,
+                cv2.circle(img, (px,py), r, (0, 0,0), -1) 
 
+            #if num white points has changed, black circles 'passed through' obstacles
+            
             if np.sum(img) != image_sum:
-                for px, py in zip(pixel_x, pixel_y):
-                    cv2.circle(img, (px,py), 3, (0, 0,255), -1)
-                cv2.circle(img, (pixel_x[-1],pixel_y[-1]), 68, (0, 0,255), 1)
+                self.draw_path(img,points,(0,0,255))
+                
                 print("hit")
             else:
-                for px, py in zip(pixel_x, pixel_y):
-                    cv2.circle(img, (px,py), 3, (0, 255,0), -1)
-                cv2.circle(img, (pixel_x[-1],pixel_y[-1]), 68, (0, 255,0), 1)
+                path['points'] = points
+                self.draw_path(img, path['points'],(0,255,0))
+                
+                paths.append(path)
+                
                 print("clear")
 
             cv2.imshow("Turning Radii "+str(0), img)
@@ -76,9 +81,14 @@ class DynamicPathfinder:
             cv2.waitKey(100)
         cv2.destroyAllWindows()
 
-        #TODO SCORE BY DISTANCE (AND FACTOR) TO GOAL
-        return (0,0)
-
+        for p in paths:
+            print(p)
+        return paths
+    
+    def draw_path(self, img, points=[], color=(255,255,255), r=68):
+        for px, py in points:
+            cv2.circle(img, (px,py), 3, color, -1)
+        cv2.circle(img, (points[-1][0], points[-1][1]), r, color, 1)
 
 
     def draw_bot2d(self, image, axle_x, axle_y, color=(255,255,255), show_circle=False):
@@ -93,7 +103,7 @@ class DynamicPathfinder:
             cv2.circle(image, (rx,ry),68,  (255, 255, 255), 1)
 
 
-    def get_possible_wheel_vels(self, current_v1,current_v2,steps=5,step_by=10,spin_penalty=.7,max=100,min=-100):
+    def get_possible_wheel_vels(self, current_v1,current_v2,steps=5,step_by=10,max=100,min=-100):
 
         vels=[]
         
@@ -107,29 +117,47 @@ class DynamicPathfinder:
                 j += step_by
             i += step_by
 
-        vels=sorted(vels, key=lambda v: -(v[0]+v[1]-abs(v[0]-v[1])*spin_penalty))
-
-        for v in vels:
-            print(v,-(v[0]+v[1]-abs(v[0]-v[1])*spin_penalty))
-
         return vels
     
-    
-    def next_wheel_vels(self, image=None, from_vels=None, steps=2, axle_x=None, axle_y=None):
+    def get_best_path(self, paths, goal=(0,0), w_spin=.7, w_goal=.5, w_speed=1.0):
+        paths = sorted(paths, key=lambda p: -( 
+            w_speed * (p['vels'][0] + p['vels'][1]) - 
+            w_spin * abs(p['vels'][0] - p['vels'][1]) -
+            w_goal * np.linalg.norm(np.array(goal) - np.array(p['points'][-1]))
+        ))
+
+        for p in paths:
+            print(p['vels'], 
+                  "speed:", w_speed * (p['vels'][0] + p['vels'][1]), 
+                  "spin:",-w_spin * abs(p['vels'][0] - p['vels'][1]),
+                  "goal:", -w_goal * np.linalg.norm(np.array(goal) - np.array(p['points'][-1]))
+            )
+
+        return paths[0]
+
+
+    def next_wheel_vels(self, image=None, goal=(0,0), from_vels=None, steps=2, axle_x=None, axle_y=None):
         if image is not None:  self.image = image
         if axle_x is not None: self.axle_x = axle_x
         if axle_y is not None: self.axle_y = axle_y
         if from_vels is not None:  self.current_vels = from_vels
 
-        self.draw_bot2d(image, self.axle_x, self.axle_y,(0,0,0))
+        self.draw_bot2d(image, self.axle_x, self.axle_y, (0,0,0))
 
         vels = self.get_possible_wheel_vels(self.current_vels[0], self.current_vels[1], steps)
+        paths = self.get_valid_paths(image, vels, self.cm_between_wheels)
+        print("found paths:",len(paths))
+        path = self.get_best_path(paths, goal)
+
+        show=image.copy()
+        path['points']
+        self.draw_path(show, path['points'],(0,255,0))
+
+        cv2.imshow("path", show)
+        cv2.waitKey(2000)
+        cv2.destroyAllWindows()
         
-        distance_lookahead_factor = 4.5
-
-        left_vel, right_vel = self.select_path(image, vels, self.cm_between_wheels, distance_lookahead_factor)
-
-        return (left_vel, right_vel)
+        return path
 
 
 # Create an OpenCV image of size 424x240
@@ -148,7 +176,7 @@ cv2.imshow("mask",image)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
 
-pathfinder.next_wheel_vels(image, (30, 30)) 
+pathfinder.next_wheel_vels(image, (50,0),(30, 30)) 
 
 for i in range(20):
-    vels =  pathfinder.next_wheel_vels(image, (30, 30+i))
+    vels =  pathfinder.next_wheel_vels(image, (50,0),(30, 30+i))
