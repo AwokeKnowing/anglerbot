@@ -145,7 +145,7 @@ def topview(vis):
 
 if __name__ == "__main__":
     with_color=False   #setting false really slows down on small voxel size
-    with_forward=False
+    with_forward=True
     with_clusters=False
     with_shadow_ground=True
 
@@ -169,7 +169,7 @@ if __name__ == "__main__":
     vis = Visualizer()
     
     #need to make a function to set view and capture frame and call it 1 fps
-    vis.create_window(width=480,height=848)
+    vis.create_window(width=240,height=424)
     vis.get_render_option().point_size=28/voxel_detail
 
     floor_depth_size=(240,424)
@@ -189,6 +189,7 @@ if __name__ == "__main__":
     floor_z = tdz1
 
     morph_kernel = np.ones((5, 5), np.uint8)
+    last_forward_transform = np.identity(4)
 
     #preallocate image
 
@@ -201,21 +202,45 @@ if __name__ == "__main__":
             tempsource,rgbd,intrinsic = topdowncam.frame()
             topdown_pcd=tempsource.voxel_down_sample(voxel_size=voxel_size)
             
+            if frame_count % 30 == 0:
+                floor_inv_R,floor_Rcenter,floor_basis_points=calc_unrotate_floor(topdown_pcd)
+            
+            topdown_pcd = topdown_pcd.rotate(floor_inv_R, center=floor_Rcenter)
+            #topdown_pcd.estimate_normals()
+            
             if with_forward:
                 forward_pcd,rgbd2,intrinsic = forwardcam.frame()
                 forward_pcd = forward_pcd.voxel_down_sample(voxel_size=voxel_size)
 
                 p=np.pi/2
                 pp=np.pi
-                forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([-p,0,0])))
+                p3=np.pi/6
+                p10=np.pi/18
+                deg=np.pi/180
+                forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([-p+15.5*deg+p10,0,0])))
                 forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([0,0,p])))
-                forward_pcd = forward_pcd.translate([2.1,.50,1.67])
+                if with_color:
+                    forward_pcd = forward_pcd.translate([1.57,.20,.64])
+                else:
+                    forward_pcd = forward_pcd.translate([.88,.40,.32])
+
+                #reg_p2p = o3d.pipelines.registration.registration_icp(
+                #    forward_pcd, topdown_pcd, .02, np.identity(4),
+                #    o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+                #    #o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000)
+                #    )
+                #forward_pcd.paint_uniform_color((0,1,0))
+                #topdown_pcd.paint_uniform_color((1,0,0))
+                #print("reg",reg_p2p)
+                #if reg_p2p.fitness > .04 and len(reg_p2p.correspondence_set)>150:
+                #    #forward_pcd.transform(reg_p2p.transformation)
+                #    last_forward_transform = reg_p2p.transformation
+                #else:
+                #    print("bad fit")
+                #    #forward_pcd.transform(last_forward_transform)
          
             
-            if frame_count % 30 == 0:
-                floor_inv_R,floor_Rcenter,floor_basis_points=calc_unrotate_floor(topdown_pcd)
             
-            topdown_pcd = topdown_pcd.rotate(floor_inv_R, center=floor_Rcenter)
                             
             
             # because topdown 0,0 is the 'origin' of robot, we set 
@@ -316,14 +341,11 @@ if __name__ == "__main__":
 #2d render
             
             vis.update_renderer()
-            floor_depth = np.array(vis.capture_depth_float_buffer())
-            #vis.capture_depth_image("capture_depth_image.png")
-            #colorized = cv2.applyColorMap(cv2.convertScaleAbs(dp, alpha=30.9), cv2.COLORMAP_JET)
-            floor_depth = cv2.resize(floor_depth, floor_depth_size, interpolation= cv2.INTER_AREA)
-            #colorized = cv2.blur(src=colorized, ksize=(5,5))
-            #floor_depth = cv2.medianBlur(src=floor_depth, ksize=3)
+            floor_depth = np.array(vis.capture_depth_float_buffer()).astype(np.uint8)
+            floor_depth = cv2.resize(floor_depth, floor_depth_size, interpolation= cv2.INTER_LINEAR)
             floor_depth = cv2.morphologyEx(floor_depth, cv2.MORPH_CLOSE, morph_kernel)
-            floor_depth = np.where(floor_depth>0, 255, 0).astype(np.uint8).copy()
+            ret, floor_depth = cv2.threshold(floor_depth, 0, 255, cv2.THRESH_BINARY)
+            #floor_depth = np.where(floor_depth>0, 255, 0).astype(np.uint8).copy()
 
             #floor_depth_save = floor_depth
             #cv2.imshow('floor depth save', floor_depth_save)
@@ -332,30 +354,27 @@ if __name__ == "__main__":
                 #recalculate every 4 frames
                 if frame_count % 4 == 0:
                     vis.add_geometry(ground_pcd,False)
-                    #vis.update_renderer()
-                    shadow_ground_depth = np.array(vis.capture_depth_float_buffer(True))
+
+                    shadow_ground_depth = np.array(vis.capture_depth_float_buffer(True)).astype(np.uint8)
                     vis.remove_geometry(ground_pcd,False)
-                    shadow_ground_depth = cv2.resize(shadow_ground_depth, floor_depth_size, interpolation= cv2.INTER_AREA)
+                    shadow_ground_depth = cv2.resize(shadow_ground_depth, floor_depth_size, interpolation=cv2.INTER_LINEAR)
                     shadow_ground_depth = cv2.morphologyEx(shadow_ground_depth, cv2.MORPH_CLOSE, morph_kernel)
-                    floor_acc = np.where(shadow_ground_depth>0, 0, 255).astype(np.uint8).copy()
+                    ret, shadow_ground_depth = cv2.threshold(shadow_ground_depth, 0, 255, cv2.THRESH_BINARY_INV)
+                    floor_acc = shadow_ground_depth
+                    #floor_acc = np.where(shadow_ground_depth>0, 0, 255).astype(np.uint8).copy()
                     
                     #cover the tail shadow
                     cv2.rectangle(floor_acc, (100,276), (240-100,423), (0,0,0), -1)
-                
+                #print(floor_acc,floor_depth)
                 floor_depth=cv2.bitwise_or(floor_acc,floor_depth)
                 floor_depth = cv2.morphologyEx(floor_depth, cv2.MORPH_CLOSE, morph_kernel)
-                #cv2.imshow('floor depth acc', floor_acc)
             
-            #cv2.floodFill(floor_depth, None, (120,212), (0, 0, 0))
             cv2.imshow('floor depth', floor_depth)
-            cv2.imwrite('botmask.png',floor_depth)
+            #cv2.imwrite('botmask.png',floor_depth)
             cv2.waitKey(1)
 
             #cv2.imshow('floor depth', floor_depth)
             #cv2.imshow('floor depth acc', floor_acc)
-
-            #mask_accumulated = cv2.bitwise_or(mask_accumulated, mask)
-
 
             process_time = datetime.now() - dt0
             frame_count += 1

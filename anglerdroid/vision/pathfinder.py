@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import cv2
 
@@ -164,6 +163,7 @@ class DynamicPathfinder:
 
 
 if __name__ == '__main__':
+    import time
     # Create an OpenCV image of size 424x240
     image = cv2.imread('floorexample.png',cv2.IMREAD_GRAYSCALE)
 
