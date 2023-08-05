@@ -4,8 +4,9 @@ import open3d as o3d
 
 class RealsenseCamera:
     
-    def __init__(self,serial,with_color=True):
+    def __init__(self,serial,with_color=True, extrinsics=np.identity(4)):
         self.serial =  serial
+        self.extrinsics=extrinsics
 
         pipeline = rs.pipeline()
         config = rs.config()
@@ -83,7 +84,7 @@ class RealsenseCamera:
                                   [ 0, fy, cy],
                                   [ 0,  0,  1]])
         
-        flip_transform = [[-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
+        flip_transform = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 
         if self.with_color:
             intrinsics = o3d.camera.PinholeCameraIntrinsic(640, 480, fx, fy, cx, cy)
@@ -96,7 +97,7 @@ class RealsenseCamera:
                     color_image, depth_image, depth_scale=1.0/self.depth_scale,
                     depth_trunc=clip_meters,
                     convert_rgb_to_intensity = False)
-            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
+            pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics,self.extrinsics)
         else:
             intrinsics = o3d.camera.PinholeCameraIntrinsic(848, 480, fx, fy, cx, cy)
             depth_data = np.array(aligned_depth_frame.get_data())
@@ -104,7 +105,7 @@ class RealsenseCamera:
             rgbd_image = depth_image
           
             pcd = o3d.geometry.PointCloud.create_from_depth_image(
-                    depth_image, intrinsics,depth_scale=1.0/self.depth_scale,
+                    depth_image, intrinsics,self.extrinsics, depth_scale=1.0/self.depth_scale,
                     depth_trunc=clip_meters,stride=stride)
             #pcd.paint_uniform_color([.5,.8,.5])
             

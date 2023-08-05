@@ -151,7 +151,7 @@ if __name__ == "__main__":
 
     show_voxels=False 
     show_pointcloud=True
-    show_axis=False
+    show_axis=True
     show_topdown_roi_box=True
     show_boxbot=True
     show_floor_basis_points=False
@@ -161,10 +161,21 @@ if __name__ == "__main__":
     voxel_detail = 2
     voxel_size=.1/float(2.**max(0,min(4,voxel_detail))) #clamp detail 0-5
 
-    topdowncam = a7.RealsenseCamera("815412070676",with_color)
+
+    topdown2world=np.identity(4)
+    topdown2world[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
+        [np.deg2rad(0),
+         np.deg2rad(0),
+         np.deg2rad(180)])
+    topdowncam = a7.RealsenseCamera("815412070676",with_color,topdown2world)
 
     if with_forward:
-        forwardcam = a7.RealsenseCamera("815412070180",with_color)
+        forward2topdown=np.identity(4)
+        forward2topdown[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
+            [np.deg2rad(26-90),
+             np.deg2rad(0),
+             np.deg2rad(270)])
+        forwardcam = a7.RealsenseCamera("815412070180",with_color,forward2topdown)
     
     vis = Visualizer()
     
@@ -206,7 +217,7 @@ if __name__ == "__main__":
                 floor_inv_R,floor_Rcenter,floor_basis_points=calc_unrotate_floor(topdown_pcd)
             
             topdown_pcd = topdown_pcd.rotate(floor_inv_R, center=floor_Rcenter)
-            #topdown_pcd.estimate_normals()
+            
             
             if with_forward:
                 forward_pcd,rgbd2,intrinsic = forwardcam.frame()
@@ -217,27 +228,31 @@ if __name__ == "__main__":
                 p3=np.pi/6
                 p10=np.pi/18
                 deg=np.pi/180
-                forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([-p+15.5*deg+p10,0,0])))
-                forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([0,0,p])))
+                
+                #forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([-p+15.5*deg+p10,0,0])))
+                #forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([0,0,p])))
                 if with_color:
                     forward_pcd = forward_pcd.translate([1.57,.20,.64])
                 else:
-                    forward_pcd = forward_pcd.translate([.88,.40,.32])
+                    #forward_pcd = forward_pcd.translate([.88,.40,.32])
+                    forward_pcd = forward_pcd.translate([-.105,.035,-.525])
 
-                #reg_p2p = o3d.pipelines.registration.registration_icp(
-                #    forward_pcd, topdown_pcd, .02, np.identity(4),
-                #    o3d.pipelines.registration.TransformationEstimationPointToPlane(),
-                #    #o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000)
-                #    )
-                #forward_pcd.paint_uniform_color((0,1,0))
-                #topdown_pcd.paint_uniform_color((1,0,0))
-                #print("reg",reg_p2p)
-                #if reg_p2p.fitness > .04 and len(reg_p2p.correspondence_set)>150:
-                #    #forward_pcd.transform(reg_p2p.transformation)
-                #    last_forward_transform = reg_p2p.transformation
-                #else:
-                #    print("bad fit")
-                #    #forward_pcd.transform(last_forward_transform)
+                if False:
+                    topdown_pcd.estimate_normals()
+                    reg_p2p = o3d.pipelines.registration.registration_icp(
+                        forward_pcd, topdown_pcd, .02, np.identity(4),
+                        o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+                        #o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=2000)
+                        )
+                    #forward_pcd.paint_uniform_color((0,1,0))
+                    #topdown_pcd.paint_uniform_color((1,0,0))
+                    #print("reg",reg_p2p)
+                    if True or reg_p2p.fitness > .04 and len(reg_p2p.correspondence_set)>150:
+                        forward_pcd.transform(reg_p2p.transformation)
+                        last_forward_transform = reg_p2p.transformation
+                    else:
+                        print("bad fit")
+                        forward_pcd.transform(last_forward_transform)
          
             
             
