@@ -17,204 +17,222 @@ import anglerdroid as a7
 
 import matplotlib.pyplot as plt
 
-def mb_box(sx,sy,sz,t,c):
-    c=[1,1,1]
-    #create a box and return mesh and bounding box
-    rb1 = o3d.geometry.TriangleMesh.create_box(width=sx, height=sy, depth=sz)
-    rb1.paint_uniform_color(c)
-    rb1.translate(t)
-    return rb1.get_axis_aligned_bounding_box(),rb1
 
 
-boxbot_last_mesh=None
-boxbot_last_bboxes=None
-def extract_boxbot(pcd,recalculate=False):
-    global boxbot_last_mesh,boxbot_last_bboxes
-    if recalculate or boxbot_last_mesh is None:
-        fl=-1.0
-        rb1sx=.44
-        rb1sy=.36
-        rb1sz=.55
-        rb1bb, rb1 = mb_box(rb1sx,rb1sy,rb1sz,
-                            [(-rb1sx/2-.07),-rb1sy/2,fl],
-                            [0.9, 0.1, 0.1])
 
-        rb2sx=.36
-        rb2sy=.43
-        rb2sz=.55
-        rb2bb, rb2 = mb_box(rb2sx,rb2sy,rb2sz,
-                            [(-rb2sx/2-.03),-rb2sy/2,fl],
-                            [0.9, 0.5, 0.1])
+class AnglerDroidVision3D:
+    def __init__(self, *, rsTopdownSerial="815412070676", rsForwardSerial="815412070180"):
+        self.with_color = False
+        self.with_forward = True
+        self.with_forward_alignment = False
+        self.with_clusters = False
+        self.with_shadow_ground = False
+        self.with_voxels = False
+
+        self.show_pointcloud = True
+        self.show_axis = False 
+        self.show_topdown_roi_box = False 
+        self.show_boxbot = False
+        self.show_floor_basis_points = False 
+
+        self.crop_floor = True
+
+        self.voxel_detail = 2
+        self.voxel_size = .1/float(2.**max(0,min(4,voxel_detail))) #clamp detail 0-5
+
+        #topdown camera is rotated 180 so x will be forward
+        self.topdown2world=np.identity(4)
+        self.topdown2world[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
+            [np.deg2rad(0),
+            np.deg2rad(0),
+            np.deg2rad(180)])
         
-        rb3sx=.22
-        rb3sy=.46
-        rb3sz=.22
-        rb3bb, rb3 = mb_box(rb3sx,rb3sy,rb3sz,
-                            [(-rb3sx/2+.00),-rb3sy/2,fl],
-                            [0.1, 0.1, 0.1])
+        self.forward2topdown=np.identity(4)
+        self.forward2topdown[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
+            [np.deg2rad(26-90), #camera is pointed 26 degres down from straight ahead
+            np.deg2rad(0),
+            np.deg2rad(270)])
+                      
+        self.last_forward_transform = np.identity(4)
+        
+        self.forwardcam=None
 
-        rb4sx=.16
-        rb4sy=.22
-        rb4sz=1.0
-        rb4bb, rb4 = mb_box(rb4sx,rb4sy,rb4sz,[(-rb4sx/2-.21),-rb4sy/2,fl],[0.4, 0.4, 0.6])
+        self.topdown_size = (224,224)
+        self.topdown_size2d = (224,224)
 
-        boxbot_last_mesh = rb1+rb2+rb3+rb4
-        boxbot_last_bboxes = (rb1bb,rb2bb,rb3bb,rb4bb)
-    else:
-        rb1bb,rb2bb,rb3bb,rb4bb = boxbot_last_bboxes
+        self.boxbot_mesh=None
+        self.boxbot_bboxes=None
+        
+        self.topdowncam = a7.RealsenseCamera(rsTopdownSerial,self.with_color,self.topdown2world)
+        if self.with_forward:
+            self.forwardcam = a7.RealsenseCamera(rsForwardSerial,with_color,forward2topdown)
+        
+        self.vis_topdown = Visualizer()
+        
+        #need to make a function to set view and capture frame and call it 1 fps
+        self.vis_topdown.create_window(width=self.topdown_size[0],height=self.topdown_size[1])
+        self.vis_topdown.get_render_option().point_size=4/self.voxel_detail
 
-    rbp1 = rb1bb.get_point_indices_within_bounding_box(pcd.points)
-    rbp2 =(rb2bb.get_point_indices_within_bounding_box(pcd.points))
-    rbp3 =(rb3bb.get_point_indices_within_bounding_box(pcd.points))
-    rbp4 =(rb4bb.get_point_indices_within_bounding_box(pcd.points))
+        #preallocate image
+        self.floor_acc = np.zeros_like(self.topdown_size2d)
+        
+        self.pcd = PointCloud()
+        self.floor_basis_points_pcd = PointCloud()
 
-    boxbot_points = list(set(rbp1+rbp2+rbp3+rbp4))
+
+    def getRealsenseWorldBounds(self, with_forward,min_obstacle_height=.005):
+        #topdown roi volume points (for obstacles, ie excluding floor)
+        min_obstacle_height=.005 #obstacles smaller than this will be ignored
+        
+        tdx1 = -0.92
+        tdx2 = +0.92
+        tdy1 = -0.54
+        tdy2 = +0.54
+        tdz1 = -0.92
+        tdz2 = -0.0
+        floor_z = tdz1 + min_obstacle_height 
+
+        if with_forward:
+            tdx1 = -0.92
+            tdx2 = +3.56
+            tdy1 = -2.24
+            tdy2 = +2.24
+
+        return [tdx1,tdx2,tdy1,tdy2,floor_z,tdz2]
+
+
+    def mb_box(self,sx,sy,sz,t,c):
+        c=[1,1,1]
+        #create a box and return mesh and bounding box
+        rb1 = o3d.geometry.TriangleMesh.create_box(width=sx, height=sy, depth=sz)
+        rb1.paint_uniform_color(c)
+        rb1.translate(t)
+        return rb1.get_axis_aligned_bounding_box(),rb1
+
+
+    def getRobotBoundingMeshAndBoundingBoxes(self):
+            fl=-1.0
+            rb1sx=.44
+            rb1sy=.36
+            rb1sz=.55
+            rb1bb, rb1 = self.mb_box(rb1sx,rb1sy,rb1sz,
+                                [(-rb1sx/2-.07),-rb1sy/2,fl],
+                                [0.9, 0.1, 0.1])
+
+            rb2sx=.36
+            rb2sy=.43
+            rb2sz=.55
+            rb2bb, rb2 = self.mb_box(rb2sx,rb2sy,rb2sz,
+                                [(-rb2sx/2-.03),-rb2sy/2,fl],
+                                [0.9, 0.5, 0.1])
+            
+            rb3sx=.22
+            rb3sy=.46
+            rb3sz=.22
+            rb3bb, rb3 = self.mb_box(rb3sx,rb3sy,rb3sz,
+                                [(-rb3sx/2+.00),-rb3sy/2,fl],
+                                [0.1, 0.1, 0.1])
+
+            rb4sx=.16
+            rb4sy=.22
+            rb4sz=1.0
+            rb4bb, rb4 = self.mb_box(rb4sx,rb4sy,rb4sz,[(-rb4sx/2-.21),-rb4sy/2,fl],[0.4, 0.4, 0.6])
+
+            boxbot_mesh = rb1+rb2+rb3+rb4
+            boxbot_bboxes = (rb1bb,rb2bb,rb3bb,rb4bb)
+
+            return boxbot_mesh,boxbot_bboxes
+
+
+    def extract_boxbot(self,pcd,recalculate=False):
+        
+        if recalculate or self.boxbot_last_mesh is None:
+            self.boxbot_mesh,self.boxbot_bboxes = self.getRobotBoundingMeshAndBoundingBoxes()
+        else:
+            rb1bb,rb2bb,rb3bb,rb4bb = self.boxbot_bboxes
+
+        rbp1 = rb1bb.get_point_indices_within_bounding_box(self.pcd.points)
+        rbp2 =(rb2bb.get_point_indices_within_bounding_box(self.pcd.points))
+        rbp3 =(rb3bb.get_point_indices_within_bounding_box(self.pcd.points))
+        rbp4 =(rb4bb.get_point_indices_within_bounding_box(self.pcd.points))
+
+        boxbot_points = list(set(rbp1+rbp2+rbp3+rbp4))
+        
+        boxbot_pcd=pcd.select_by_index(boxbot_points)
+        not_boxbot_pcd=pcd.select_by_index(boxbot_points, invert=True) #select outside points
+        
+        return not_boxbot_pcd, boxbot_pcd
     
-    boxbot_pcd=pcd.select_by_index(boxbot_points)
-    not_boxbot_pcd=pcd.select_by_index(boxbot_points, invert=True) #select outside points
+
+    def bbox_from_xxyyzz(self,x1,x2,y1,y2,z1,z2,color=(1, 0, 0)):
+        vec= o3d.utility.Vector3dVector(np.asarray([
+            [x1, y1, z1],
+            [x2, y1, z1],
+            [x1, y2, z1],
+            [x1, y1, z2],
+            [x2, y2, z2],
+            [x1, y2, z2],
+            [x2, y1, z2],
+            [x2, y2, z1]
+        ]))
+
+        bbox = o3d.geometry.AxisAlignedBoundingBox.create_from_points(vec)
+        bbox.color = color
+        return bbox
+
+
+    def calc_unrotate_floor(pcd,ransac_dist=.015,ransac_n=3,ransac_iter=100):
+        
+        plane, points = pcd.segment_plane(distance_threshold=ransac_dist,
+                                                ransac_n=ransac_n,
+                                                num_iterations=ransac_iter)
+        #[a, b, c, d] = plane
+        #print(f"Plane equation: {a:.5f}x + {b:.5f}y + {c:.5f}z + {d:.5f} = 0")
+        
+        in_pcd=topdown_pcd.select_by_index(points)
+        
+        obb=in_pcd.get_oriented_bounding_box()
+        obb.color=(0, 1, 0)
+        R=obb.R
+        #print(R) #this can be backward because obb direction is random
+
+        sy = np.sqrt(R[0][0] * R[0][0] +  R[1][0] * R[1][0])
+        x = np.arctan2(R[2][1] , R[2][2])
+        y = np.arctan2(-R[2][0], sy)
+        z = 0 #we don't want to rotate on z #np.arctan2(R[1][0], R[0][0])
+        
+        #at least when detecting floor plane, avoids flip when R is oriented backward
+        if(x>np.pi/2):
+            x-=np.pi
+        if(x<-np.pi/2):
+            x+=np.pi
+        
+        R = o3d.geometry.get_rotation_matrix_from_zyx(np.array([z,y,x]))
+        inv_R = np.linalg.inv(R)
+        
+        Rcenter=obb.get_center()
+        
+        #in_pcd.paint_uniform_color([1.0, 0, 0])
+        #in_pcd=inpcd.rotate(inv_R,center=Rcenter)
+
+        return inv_R, Rcenter,in_pcd
     
-    
 
-    return not_boxbot_pcd,boxbot_pcd, boxbot_last_mesh
+    def topview(self, vis):
+        rq=523.598775 # sigh...
+        vis.get_view_control().rotate(0,rq,0,0)
+        vis.get_view_control().rotate(-rq,0,0,0)
+        vis.get_view_control().rotate(0,-rq,0,0)
 
-def bbox_from_xxyyzz(x1,x2,y1,y2,z1,z2,color=(1, 0, 0)):
-    vec= o3d.utility.Vector3dVector(np.asarray([
-        [x1, y1, z1],
-        [x2, y1, z1],
-        [x1, y2, z1],
-        [x1, y1, z2],
-        [x2, y2, z2],
-        [x1, y2, z2],
-        [x2, y1, z2],
-        [x2, y2, z1]
-    ]))
+        vis.get_view_control().set_zoom(.48)
 
-    bbox = o3d.geometry.AxisAlignedBoundingBox.create_from_points(vec)
-    bbox.color = color
-    return bbox
-
-
-def calc_unrotate_floor(pcd,ransac_dist=.015,ransac_n=3,ransac_iter=100):
-    
-    plane, points = pcd.segment_plane(distance_threshold=ransac_dist,
-                                             ransac_n=ransac_n,
-                                             num_iterations=ransac_iter)
-    #[a, b, c, d] = plane
-    #print(f"Plane equation: {a:.5f}x + {b:.5f}y + {c:.5f}z + {d:.5f} = 0")
-    
-    in_pcd=topdown_pcd.select_by_index(points)
-    
-    obb=in_pcd.get_oriented_bounding_box()
-    obb.color=(0, 1, 0)
-    R=obb.R
-    #print(R) #this can be backward because obb direction is random
-
-    sy = np.sqrt(R[0][0] * R[0][0] +  R[1][0] * R[1][0])
-    x = np.arctan2(R[2][1] , R[2][2])
-    y = np.arctan2(-R[2][0], sy)
-    z = 0 #we don't want to rotate on z #np.arctan2(R[1][0], R[0][0])
-    
-    #at least when detecting floor plane, avoids flip when R is oriented backward
-    if(x>np.pi/2):
-        x-=np.pi
-    if(x<-np.pi/2):
-        x+=np.pi
-    
-    R = o3d.geometry.get_rotation_matrix_from_zyx(np.array([z,y,x]))
-    inv_R = np.linalg.inv(R)
-    
-    Rcenter=obb.get_center()
-    
-    #in_pcd.paint_uniform_color([1.0, 0, 0])
-    #in_pcd=inpcd.rotate(inv_R,center=Rcenter)
-
-    return inv_R, Rcenter,in_pcd
-
-def topview(vis):
-    rq=523.598775 # sigh...
-    vis.get_view_control().rotate(0,rq,0,0)
-    vis.get_view_control().rotate(-rq,0,0,0)
-    vis.get_view_control().rotate(0,-rq,0,0)
-
-    vis.get_view_control().set_zoom(.48)
-
-    #ortho
-    vis.get_view_control().change_field_of_view(step=-90)
-
-
-
+        #ortho
+        vis.get_view_control().change_field_of_view(step=-90)
 
 
 if __name__ == "__main__":
-    with_color=False   #setting false really slows down on small voxel size
-    with_forward=True
-    with_forward_alignment=False
-    with_clusters=False
-    with_shadow_ground=False
-    with_voxels=False 
-
-    show_pointcloud=True
-    show_axis=False
-    show_topdown_roi_box=False
-    show_boxbot=False
-    show_floor_basis_points=False
-
-    crop_floor=True
-
-    voxel_detail = 2
-    voxel_size=.1/float(2.**max(0,min(4,voxel_detail))) #clamp detail 0-5
-
-
-    topdown2world=np.identity(4)
-    topdown2world[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
-        [np.deg2rad(0),
-         np.deg2rad(0),
-         np.deg2rad(180)])
-    topdowncam = a7.RealsenseCamera("815412070676",with_color,topdown2world)
-
-    if with_forward:
-        forward2topdown=np.identity(4)
-        forward2topdown[:3,:3]=o3d.geometry.get_rotation_matrix_from_xyz(
-            [np.deg2rad(26-90),
-             np.deg2rad(0),
-             np.deg2rad(270)])
-        forwardcam = a7.RealsenseCamera("815412070180",with_color,forward2topdown)
-    
-    vis = Visualizer()
-    
-    #need to make a function to set view and capture frame and call it 1 fps
-    vis.create_window(width=224,height=224)
-    vis.get_render_option().point_size=4/voxel_detail
-
-    floor_depth_size=(224,224)
-    floor_acc= np.zeros_like(floor_depth_size)
-    
-    pcd = PointCloud()
-    floor_basis_points_pcd = PointCloud()
-
-    #topdown roi volume points (for obstacles, ie excluding floor)
-    min_obstacle_height=.005 #obstacles smaller than this will be ignored
-    tdx1 = -0.92
-    tdx2 = +0.92
-    tdy1 = -0.54
-    tdy2 = +0.54
-    tdz1 = -0.92
-    tdz2 = -0.0
-    floor_z = tdz1 + min_obstacle_height 
-
-    if with_forward:
-        tdx1 = -0.92
-        tdx2 = +3.56
-        tdy1 = -2.24
-        tdy2 = +2.24
-
-    morph_kernel = np.ones((3, 3), np.uint8)
-    last_forward_transform = np.identity(4)
-
-    #preallocate image
-
-    # Streaming loop
     frame_count = 0
+    vis3d = AnglerDroidVision3D()
     try:
         while True:
 
@@ -233,15 +251,7 @@ if __name__ == "__main__":
             if with_forward:
                 forward_pcd,rgbd2,intrinsic = forwardcam.frame(3,4)
                 forward_pcd = forward_pcd.voxel_down_sample(voxel_size=voxel_size)
-
-                p=np.pi/2
-                pp=np.pi
-                p3=np.pi/6
-                p10=np.pi/18
-                deg=np.pi/180
                 
-                #forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([-p+15.5*deg+p10,0,0])))
-                #forward_pcd = forward_pcd.rotate(o3d.geometry.get_rotation_matrix_from_xyz(np.array([0,0,p])))
                 if with_color:
                     forward_pcd = forward_pcd.translate([1.57,.20,.64])
                 else:

@@ -112,6 +112,7 @@ class RealsenseCamera:
         
         pcd.transform(flip_transform)
 
+        # when with_color is False rgbd_image is just the depth image
         return pcd, rgbd_image, intrinsics
 
 
