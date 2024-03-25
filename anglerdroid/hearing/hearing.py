@@ -9,7 +9,7 @@ import io
 
 
 def start(config, whiteFiber, brainSleeping):
-    print("starting hearing")
+    print("hearing: starting", flush=True)
     source=None
     mic=None
 
@@ -36,16 +36,16 @@ def start(config, whiteFiber, brainSleeping):
     # Prevents permanent application hang and crash by using the wrong Microphone
     mic_name = config['ears.mic_device']
     if not mic_name or mic_name == 'list':
-        print("Available microphone devices are: ")
+        print("hearing: Available microphone devices are: ", flush=True)
         for index, name in enumerate(sr.Microphone.list_microphone_names()):
-            print(f"Microphone with name \"{name}\" found")   
+            print(f"hearing: Microphone with name \"{name}\" found", flush=True)   
         return
     else:
         for index, name in enumerate(sr.Microphone.list_microphone_names()):
             if mic_name in name:
                 mic = sr.Microphone(sample_rate=16000, device_index=index)
                 
-                print ("mic",repr(source))
+                print ("hearing: mic",repr(source), flush=True)
                 break
 
     #with mic as source: r.adjust_for_ambient_noise(source)
@@ -68,7 +68,7 @@ def start(config, whiteFiber, brainSleeping):
     def transcribe(axon, recognizer, audio):
         try:
             audio2 = copy.deepcopy(audio)
-            print("transcribing")
+            print("hearing: transcribing", flush=True)
             text = recognizer.recognize_google(audio2,key=None,language="en-US",pfilter=1,show_all=False,with_confidence=False)
             if len(text):
                 axon["/hearing/statement"].put(text)
@@ -78,7 +78,7 @@ def start(config, whiteFiber, brainSleeping):
             #print("didn't understand")
             
         except sr.RequestError as e:
-            print("Could not request results from Speech Recognition service; {0}".format(e))    
+            print("hearing: Could not request results from Speech Recognition service; {0}".format(e), flush=True)    
 
     """    
         stop_hearing = recognizer.listen_in_background(
@@ -95,11 +95,11 @@ def start(config, whiteFiber, brainSleeping):
     """
     #mic energy should be 200 (silence) to 800 (air conditioner)
 
-    print("hearing ready")
+    print("hearing: ready", flush=True)
     while not brainSleeping.isSet():
         try:
             #print("Kevin is listening...")
-            print("mic level", str(map_mic_energy(recognizer.energy_threshold))+'%' )
+            print("hearing: mic level", str(map_mic_energy(recognizer.energy_threshold))+'%' , flush=True)
             with mic as source:audio = recognizer.listen(source, timeout=2,phrase_time_limit=15)
 
             transcriber = threading.Thread(target=transcribe, args=(axon, recognizer, audio),daemon=True)
@@ -113,4 +113,4 @@ def start(config, whiteFiber, brainSleeping):
 
         time.sleep(.01)
 
-    print("stopped hearing")
+    print("hearing: stopped", flush=True)

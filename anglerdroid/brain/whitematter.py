@@ -40,6 +40,8 @@ class WhiteFiber:
     def _broadcast(self):
         while True:
             for topic, queue in self.put_queues.items():
+                #if topic == "/plan/motion/diffdrive/leftrightvels":
+                #    print("here")
                 while not queue.empty():
                     data = queue.get()
                     for get_queue in self.get_queues[topic]:
@@ -93,6 +95,16 @@ class TopicProxy:
                 return self.get_q.get(False)
             except queue.Empty:
                 return None
+            
+    def get_all(self):
+        items=[]
+        while True:
+            item = self.get()
+            if item is None:
+                break
+            items.append(item)
+
+        return items
         
 
 

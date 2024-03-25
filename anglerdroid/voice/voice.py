@@ -5,7 +5,7 @@ import simpleaudio as sa
 from . import voice_effect
 
 def start(config, whiteFiber, brainSleeping):
-    print("starting voice")
+    print("voice: starting", flush=True)
     axon = whiteFiber.axon(
         get_topics=[
             '/voice/statement'
@@ -20,7 +20,7 @@ def start(config, whiteFiber, brainSleeping):
     polly = boto3.client('polly', region_name='us-west-2')
     #text = "<speak>Hi! I'm Matthew. Hope you are doing well. This is a sample PCM to WAV conversion for SSML. I am a Neural voice and have a conversational style. </speak>" # Input in SSML
 
-    print("voice ready")
+    print("voice: ready", flush=True)
     while not brainSleeping.isSet():
         time.sleep(.1)
         text = axon['/voice/statement'].get()
@@ -61,4 +61,4 @@ def start(config, whiteFiber, brainSleeping):
             play_obj.wait_done()#robot shouldn't ever play more than one voice at once
         
         
-    print("stopped voice")
+    print("voice: stopped", flush=True)

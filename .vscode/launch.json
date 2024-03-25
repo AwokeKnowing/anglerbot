@@ -1,10 +1,21 @@
 {
     "configurations": [
         {
-            "name": "Python: File",
+            "name": "py kevin.py",
             "type": "python",
             "request": "launch",
-            "program": "${file}",
+            "program": "kevin.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
+            "name": "Py File",
+            "type": "python",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "program": "${relativeFile}",
+            "env": {"PYTHONPATH": "${workspaceFolder}${pathSeparator}${env:PYTHONPATH}"},
             "justMyCode": true
         }
     ]

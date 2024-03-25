@@ -14,7 +14,7 @@ class IdleTimer:
         self.enable()
 
     def activity(self):
-        print("activity")
+        print("idletimer: activity", flush=True)
         self.last_update = time.time()
         self.callback_triggered = False
 
@@ -33,6 +33,7 @@ class IdleTimer:
             
 
     def enable(self, seconds=None):
+        print("idletimer: enable", flush=True)
         self.activity()
         if seconds is not None:
             self.threshold = seconds
@@ -44,6 +45,7 @@ class IdleTimer:
             self.timer_thread.start()
 
     def disable(self):
+        print("idletimer: disable", flush=True)
         self.timer_event.set()
         if self.timer_thread:
             self.timer_thread.join()

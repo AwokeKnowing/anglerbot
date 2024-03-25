@@ -3,7 +3,18 @@ import openai
 import time
 
 def start(config, whiteFiber, brainSleeping):
-    print("starting language")
+    
+
+    axon = whiteFiber.axon(
+        get_topics=[
+            "/language/chat/in/statement"
+        ],
+        put_topics=[
+            "/language/chat/out/statement"
+        ]
+    )
+
+    print("language: starting", flush=True)
     openai.api_key = os.getenv("OPENAI_API_KEY")
 
     spoken_message_prompt = [
@@ -18,16 +29,7 @@ def start(config, whiteFiber, brainSleeping):
 
     spoken_messages_history = []
 
-    axon = whiteFiber.axon(
-        get_topics=[
-            "/language/chat/in/statement"
-        ],
-        put_topics=[
-            "/language/chat/out/statement"
-        ]
-    )
-
-    print("language ready")
+    print("language: ready", flush=True)
     while not brainSleeping.isSet():
         time.sleep(.1)
         text = axon["/language/chat/in/statement"].get()
@@ -49,5 +51,5 @@ def start(config, whiteFiber, brainSleeping):
 
         axon["/language/chat/out/statement"].put(response_text)
     
-    print("stopped language")
+    print("language: stopped", flush=True)
         

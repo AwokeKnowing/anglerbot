@@ -13,7 +13,7 @@ class RealsenseCamera:
         config.enable_device(serial)
         config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 90)
         if with_color:
-            config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+            config.enable_stream(rs.stream.color, 320, 240, rs.format.rgb8, 60)
         
         profile = pipeline.start(config)
         
@@ -87,7 +87,7 @@ class RealsenseCamera:
         flip_transform = [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
 
         if self.with_color:
-            intrinsics = o3d.camera.PinholeCameraIntrinsic(640, 480, fx, fy, cx, cy)
+            intrinsics = o3d.camera.PinholeCameraIntrinsic(320, 240, fx, fy, cx, cy)
             depth_data = np.array(aligned_depth_frame.get_data())
             depth_image = o3d.geometry.Image(depth_data)
             color_data = np.asarray(color_frame.get_data())
