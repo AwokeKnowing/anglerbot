@@ -175,7 +175,7 @@ FRAGMENT_SHADER = """
 out vec4 outColor;
 
 void main() {
-    outColor = vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    outColor = vec4(0.0f, 1.0f, 0.0f, 1.0f);
 }
 """
 
@@ -220,8 +220,8 @@ def setup_buffers(Nx, Ny):
 
 
 def update_vertices(t, vertex_buffer):
-    r = (t / 10.0) % 1.0
-    r = (1 - r) if r > 0.5 else r
+    r = (t / 10.0) % 2.0
+    r = (2 - r) if r > 1.0 else r
 
     with vertex_buffer as V:
         (Ny, Nx, _) = V.shape
@@ -252,7 +252,7 @@ def main():
     positionLoc = glGetAttribLocation(shader, "position")
     transformLoc = glGetUniformLocation(shader, "transform")
 
-    Nx, Ny = 32, 32
+    Nx, Ny = 424//2, 240//2
     vertex_buffer, index_buffer, Ntriangles = setup_buffers(Nx, Ny)
 
     fps = 0
@@ -261,6 +261,7 @@ def main():
 
     glUseProgram(shader)
     glEnable(GL_DEPTH_TEST)
+    glPointSize(1.0)
 
     while not glfw.window_should_close(window):
         t = glfw.get_time()
@@ -272,12 +273,17 @@ def main():
 
         update_vertices(t, vertex_buffer)
 
+
         width, height = glfw.get_window_size(window)
         glViewport(0, 0, width, height)
+        #glViewport(0, 0, 800, 800)
 
         glClearColor(0.0, 0.0, 0.0, 1.0)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+        
+        #glPolygonMode(GL_FRONT_AND_BACK, GL_LINE)
+        #glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+        #glPolygonMode(GL_FRONT_AND_BACK, GL_POINT)
 
         rot_x = pyrr.Matrix44.from_x_rotation(0)
         rot_y = pyrr.Matrix44.from_y_rotation(t)
@@ -285,10 +291,17 @@ def main():
         glUniformMatrix4fv(transformLoc, 1, GL_FALSE, rot_x * rot_y)
 
         glBindBuffer(GL_ARRAY_BUFFER, vertex_buffer.gl_buffer)
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer.gl_buffer)
+        #glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer.gl_buffer)
+
         glEnableVertexAttribArray(positionLoc)
         glVertexAttribPointer(positionLoc, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-        glDrawElements(GL_TRIANGLES, int(3 * Ntriangles), GL_UNSIGNED_INT, None)
+
+        #glDrawElements(GL_TRIANGLES, int(3 * Ntriangles), GL_UNSIGNED_INT, None)
+        #glDrawElements(GL_LINES, int(3 * Ntriangles), GL_UNSIGNED_INT, None)
+        #glDrawElements(GL_POINTS, int(3 * Ntriangles), GL_UNSIGNED_INT, None)
+
+
+        glDrawArrays(GL_POINTS, 0, Nx*Ny)
 
         glfw.swap_buffers(window)
         glfw.poll_events()

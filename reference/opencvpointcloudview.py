@@ -31,17 +31,377 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
+#import numba  
+#import numba.cuda
+
+
+from cuda import cudart
+
+import cupy as cp
+
+import pyrr
+import glfw
+
+from OpenGL.GL import *  # noqa F403
+import OpenGL.GL.shaders
+
+
+
+def format_cudart_err(err):
+    return (
+        f"{cudart.cudaGetErrorName(err)[1].decode('utf-8')}({int(err)}): "
+        f"{cudart.cudaGetErrorString(err)[1].decode('utf-8')}"
+    )
+
+
+def check_cudart_err(args):
+    if isinstance(args, tuple):
+        assert len(args) >= 1
+        err = args[0]
+        if len(args) == 1:
+            ret = None
+        elif len(args) == 2:
+            ret = args[1]
+        else:
+            ret = args[1:]
+    else:
+        err = args
+        ret = None
+
+    assert isinstance(err, cudart.cudaError_t), type(err)
+    if err != cudart.cudaError_t.cudaSuccess:
+        raise RuntimeError(format_cudart_err(err))
+
+    return ret
+
+
+class CudaOpenGLMappedBuffer:
+    def __init__(self, gl_buffer, flags=0):
+        self._gl_buffer = int(gl_buffer)
+        self._flags = int(flags)
+
+        self._graphics_ressource = None
+        self._cuda_buffer = None
+
+        self.register()
+
+    @property
+    def gl_buffer(self):
+        return self._gl_buffer
+
+    @property
+    def cuda_buffer(self):
+        assert self.mapped
+        return self._cuda_buffer
+
+    @property
+    def graphics_ressource(self):
+        assert self.registered
+        return self._graphics_ressource
+
+    @property
+    def registered(self):
+        return self._graphics_ressource is not None
+
+    @property
+    def mapped(self):
+        return self._cuda_buffer is not None
+
+    def __enter__(self):
+        return self.map()
+
+    def __exit__(self, exc_type, exc_value, trace):
+        self.unmap()
+        return False
+
+    def __del__(self):
+        self.unregister()
+
+    def register(self):
+        if self.registered:
+            return self._graphics_ressource
+        self._graphics_ressource = check_cudart_err(
+            cudart.cudaGraphicsGLRegisterBuffer(self._gl_buffer, self._flags)
+        )
+        return self._graphics_ressource
+
+    def unregister(self):
+        if not self.registered:
+            return self
+        self.unmap()
+        self._graphics_ressource = check_cudart_err(
+            cudart.cudaGraphicsUnregisterResource(self._graphics_ressource)
+        )
+        return self
+
+    def map(self, stream=None):
+        if not self.registered:
+            raise RuntimeError("Cannot map an unregistered buffer.")
+        if self.mapped:
+            return self._cuda_buffer
+
+        check_cudart_err(
+            cudart.cudaGraphicsMapResources(1, self._graphics_ressource, stream)
+        )
+
+        ptr, size = check_cudart_err(
+            cudart.cudaGraphicsResourceGetMappedPointer(self._graphics_ressource)
+        )
+
+        self._cuda_buffer = cp.cuda.MemoryPointer(
+            cp.cuda.UnownedMemory(ptr, size, self), 0
+        )
+
+        return self._cuda_buffer
+
+    def unmap(self, stream=None):
+        if not self.registered:
+            raise RuntimeError("Cannot unmap an unregistered buffer.")
+        if not self.mapped:
+            return self
+
+        self._cuda_buffer = check_cudart_err(
+            cudart.cudaGraphicsUnmapResources(1, self._graphics_ressource, stream)
+        )
+
+        return self
+
+
+class CudaOpenGLMappedArray(CudaOpenGLMappedBuffer):
+    def __init__(self, dtype, shape, gl_buffer, flags=0, strides=None, order='C'):
+        super().__init__(gl_buffer, flags)
+        self._dtype = dtype
+        self._shape = shape
+        self._strides = strides
+        self._order = order
+
+    @property
+    def cuda_array(self):
+        assert self.mapped
+        return cp.ndarray(
+            shape=self._shape,
+            dtype=self._dtype,
+            strides=self._strides,
+            order=self._order,
+            memptr=self._cuda_buffer,
+        )
+
+    def map(self, *args, **kwargs):
+        super().map(*args, **kwargs)
+        return self.cuda_array
+
+    
+
+
+
+
+VERTEX_SHADER = """
+#version 330
+
+in vec3 position;
+
+uniform mat4 transform;
+
+void main() {
+    gl_Position = transform * vec4(position, 1.0f);
+}
+"""
+
+
+FRAGMENT_SHADER = """
+#version 330
+
+out vec4 outColor;
+
+void main() {
+    outColor = vec4(0.0f, 0.7f, 0.0f, 1.0f);
+}
+"""
+
+class PointCloudGL:
+    def __init__(self, max_vertices=1000000, point_size=2.0):
+        self.max_vertices = max_vertices
+
+        self.shader = OpenGL.GL.shaders.compileProgram(
+            OpenGL.GL.shaders.compileShader(VERTEX_SHADER, GL_VERTEX_SHADER),
+            OpenGL.GL.shaders.compileShader(FRAGMENT_SHADER, GL_FRAGMENT_SHADER),
+        )
+        self.positionLoc = glGetAttribLocation(self.shader, "position")
+        self.transformLoc = glGetUniformLocation(self.shader, "transform")
+
+        glUseProgram(self.shader)
+        glEnable(GL_DEPTH_TEST)
+        glPointSize(point_size)
+
+        self.cuda_vertex_buffer = self.setup_buffers(self.max_vertices)
+
+    def setup_buffers(self, max_vertices):
+
+        ftype = np.float32
+
+        vertex_bytes = 3 * max_vertices * ftype().nbytes
+        flags = cudart.cudaGraphicsRegisterFlags.cudaGraphicsRegisterFlagsWriteDiscard
+
+        VBO = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, VBO)
+        glBufferData(GL_ARRAY_BUFFER, vertex_bytes, None, GL_DYNAMIC_DRAW)
+        vertex_buffer = CudaOpenGLMappedArray(ftype, (max_vertices, 3), VBO, flags)
+
+        return vertex_buffer
+    
+    def draw(self, num_points, width, height):
+        glViewport(0, 0, width, height)
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        
+        rot_x = pyrr.Matrix44.from_x_rotation(0)
+        rot_y = pyrr.Matrix44.from_y_rotation(0)
+
+        glUniformMatrix4fv(self.transformLoc, 1, GL_FALSE, rot_x * rot_y)
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.cuda_vertex_buffer.gl_buffer)
+
+        glEnableVertexAttribArray(self.positionLoc)
+        glVertexAttribPointer(self.positionLoc, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
+        glDrawArrays(GL_POINTS, 0, num_points)
+
+    def __del__(self):
+        self.cuda_vertex_buffer.unregister()
+
+    
+
+class WindowsGLFW:
+    def __init__(self, width=640, height=480, title="GL Window", aspect_w=None, aspect_h=None, fps=False):
+        if not glfw.init(): 
+            return
+        
+        self.fps = fps
+        self.winCount = 0
+        self.fps_stats = {}
+        self.windows = {}
+
+        win = self.create_window('main',width, height, title, aspect_w, aspect_h)
+               
+        #shortcut to main glfw window
+        self.active = 'main'
+        self.win = win
+        self.size = (width, height)
+        self.width = width
+        self.height = height
+        
+
+    def title(self,title=None,win_name=None,store=True):
+        if win_name is None:
+            win_name = self.active
+
+        window = self.windows[win_name]['win']
+
+        if title is None:
+            return glfw.get_window_title(window)
+        else:
+            glfw.set_window_title(window,title)
+            if store:
+                self.windows[win_name]['title'] = title
+
+
+    def create_window(self, name,width=640, height=480, title="GL Window", aspect_w=None,aspect_h=None):
+        if aspect_w is None: 
+            aspect_w = width
+        if aspect_h is None:
+            aspect_h = height
+        
+        window = glfw.create_window(width, height, title, None, None)
+        self.winCount += 1
+        glfw.set_window_user_pointer(window, self.winCount) # used to compare. eg see onSize below
+        glfw.set_window_aspect_ratio(window, aspect_w,aspect_h)
+        glfw.make_context_current(window)
+        glfw.swap_interval(0)
+        
+        self.fps_stats[name] = {'last_time':self.time(),'frames':0}
+
+        def onSize(window,w,h):
+            obj = glfw.get_window_user_pointer(window)
+            for k, v in self.windows.items():
+                obj2=glfw.get_window_user_pointer(v['win'])
+                if not obj is obj2:
+                    continue
+
+                v['size']=(w,h)
+                if self.win is v['win']:
+                    self.size=(w,h)
+                    self.width = w
+                    self.height = h
+                break
+
+        glfw.set_window_size_callback(window, onSize)
+
+        self.windows[name] = {'size':(width, height), 'win': window,'title':title, 'fps':60}
+
+        return window
+    
+    
+    def closed(self, win_name=None):
+        if win_name is None:
+            return glfw.window_should_close(self.win)
+        else:
+            return glfw.window_should_close(self.windows[win_name]['win'])
+        
+    
+    def time(self):
+        return glfw.get_time()
+    
+    
+    def activate(self,win_name):
+        w = self.windows[win_name]
+
+        self.active = win_name
+        self.win = w.win
+        self.size=self.size = w.size 
+        self.width,self.height = self.size 
+
+
+    def update_fps(self):
+        stat = self.fps_stats[self.active]
+        t = glfw.get_time()
+        dt = t - stat['last_time']
+        stat['frames'] += 1
+        if dt >= 1.0:
+            win = self.windows[self.active]    
+            win['fps'] = stat['frames'] / dt
+            stat['last_time'] = t
+            stat['frames'] = 0
+            self.title(f"{win['title']} ({win['fps']:.1f} fps)", store=False)
+
+    
+    def swap(self):
+        if self.fps:
+            self.update_fps()
+
+        glfw.swap_buffers(self.win)
+        glfw.poll_events()
+
+    
+    def __del__(self):
+        try:
+            glfw.terminate()
+        except TypeError:
+            pass
+
+
+
+
+
 class AppState:
 
     def __init__(self, *args, **kwargs):
         self.WIN_NAME = 'RealSense'
-        self.pitch, self.yaw = math.radians(25.6-90), math.radians(0)
+        self.pitch, self.yaw = math.radians(0), math.radians(0)
         self.translation = np.array([0, 0, 0], dtype=np.float32)
         self.distance = 0.0
         self.prev_mouse = 0, 0
         self.mouse_btns = [False, False, False]
         self.paused = False
-        self.decimate = 3
+        self.decimate = 1
         self.scale = False
         self.color = True
         self.color_scale = 1.0*10
@@ -58,7 +418,8 @@ class AppState:
         #print("pitch",math.degrees(self.pitch),"yaw",math.degrees(self.yaw))
         Rx, _ = cv2.Rodrigues((self.pitch, 0, 0))
         Ry, _ = cv2.Rodrigues((0, self.yaw, 0))
-        return np.dot(Ry, Rx).astype(np.float32)
+        Rz, _ = cv2.Rodrigues((0, 0, math.radians(0)))
+        return np.dot(Rx, Rz, Ry).astype(np.float32)
 
     @property
     def pivot(self):
@@ -76,8 +437,8 @@ pipeline_wrapper_td = rs.pipeline_wrapper(pipeline_td)
 pipeline_profile_td = config_td.resolve(pipeline_wrapper_td)
 device_td = pipeline_profile_td.get_device()
 
-config_td.enable_stream(rs.stream.depth, rs.format.z16, 60)
-config_td.enable_stream(rs.stream.color, rs.format.bgr8, 60)
+config_td.enable_stream(rs.stream.depth, 848,480,rs.format.z16, 60)
+config_td.enable_stream(rs.stream.color, 424,240,rs.format.bgr8, 60)
 
 # Start streaming
 pipeline_td.start(config_td)
@@ -85,10 +446,6 @@ pipeline_td.start(config_td)
 # Get stream profile and camera intrinsics
 profile_td = pipeline_td.get_active_profile()
 depth_profile_td = rs.video_stream_profile(profile_td.get_stream(rs.stream.depth))
-depth_intrinsics_td = depth_profile_td.get_intrinsics()
-w_td, h_td = depth_intrinsics_td.width, depth_intrinsics_td.height
-
-
 
 
 # Configure depth and color streams
@@ -100,8 +457,8 @@ pipeline_wrapper_fw = rs.pipeline_wrapper(pipeline_fw)
 pipeline_profile_fw = config_fw.resolve(pipeline_wrapper_fw)
 device_fw = pipeline_profile_fw.get_device()
 
-config_fw.enable_stream(rs.stream.depth, rs.format.z16, 60)
-config_fw.enable_stream(rs.stream.color, rs.format.bgr8, 60)
+config_fw.enable_stream(rs.stream.depth, 424,240,rs.format.z16, 60)
+config_fw.enable_stream(rs.stream.color, 424,240,rs.format.bgr8, 60)
 
 # Start streaming
 pipeline_fw.start(config_fw)
@@ -109,45 +466,28 @@ pipeline_fw.start(config_fw)
 # Get stream profile and camera intrinsics
 profile_fw = pipeline_fw.get_active_profile()
 depth_profile_fw = rs.video_stream_profile(profile_fw.get_stream(rs.stream.depth))
-depth_intrinsics_fw = depth_profile_fw.get_intrinsics()
-w_fw, h_fw = depth_intrinsics_fw.width, depth_intrinsics_fw.height
-
-
-
 
 
 # Processing blocks
 pc_td = rs.pointcloud()
 decimate_td = rs.decimation_filter()
-decimate_td.set_option(rs.option.filter_magnitude, 2 ** state.decimate)
-colorizer_td = rs.colorizer()
+decimate_td.set_option(rs.option.filter_magnitude, 2 )
 
 # Processing blocks
 pc_fw = rs.pointcloud()
 decimate_fw = rs.decimation_filter()
-decimate_fw.set_option(rs.option.filter_magnitude, 2 ** state.decimate)
-colorizer_fw = rs.colorizer()
+decimate_fw.set_option(rs.option.filter_magnitude, 4)
+
 
 
 def mouse_cb(event, x, y, flags, param):
 
-    if event == cv2.EVENT_LBUTTONDOWN:
-        state.mouse_btns[0] = True
-
-    if event == cv2.EVENT_LBUTTONUP:
-        state.mouse_btns[0] = False
-
-    if event == cv2.EVENT_RBUTTONDOWN:
-        state.mouse_btns[1] = True
-
-    if event == cv2.EVENT_RBUTTONUP:
-        state.mouse_btns[1] = False
-
-    if event == cv2.EVENT_MBUTTONDOWN:
-        state.mouse_btns[2] = True
-
-    if event == cv2.EVENT_MBUTTONUP:
-        state.mouse_btns[2] = False
+    if event == cv2.EVENT_LBUTTONDOWN: state.mouse_btns[0] = True
+    if event == cv2.EVENT_LBUTTONUP:   state.mouse_btns[0] = False
+    if event == cv2.EVENT_RBUTTONDOWN: state.mouse_btns[1] = True
+    if event == cv2.EVENT_RBUTTONUP:   state.mouse_btns[1] = False
+    if event == cv2.EVENT_MBUTTONDOWN: state.mouse_btns[2] = True
+    if event == cv2.EVENT_MBUTTONUP:   state.mouse_btns[2] = False
 
     if event == cv2.EVENT_MOUSEMOVE:
 
@@ -157,6 +497,7 @@ def mouse_cb(event, x, y, flags, param):
         if state.mouse_btns[0]:
             state.yaw += float(dx) / w * 2
             state.pitch -= float(dy) / h * 2
+            print("yaw pitch",state.yaw,state.pitch)
 
         elif state.mouse_btns[1]:
             dp = np.array((dx / w, dy / h, 0), dtype=np.float32)
@@ -167,7 +508,7 @@ def mouse_cb(event, x, y, flags, param):
             state.translation[2] += dz
             state.distance -= dz
 
-        print(state.translation)
+        #print(state.translation)
 
     if event == cv2.EVENT_MOUSEWHEEL:
         dz = math.copysign(0.1, flags)
@@ -182,325 +523,138 @@ cv2.resizeWindow(state.WIN_NAME, state.obst_canvas_size[1], state.obst_canvas_si
 cv2.setMouseCallback(state.WIN_NAME, mouse_cb)
 
 
-def project(v, px_size=.01, ortho=True):
-    """project 3d vector array to 2d"""
-    h, w = out.shape[:2]
+tnow = time.time()
+times={}
+def tstep(t):
+    global times, tnow
+    nt=time.time()
+    times[t]=(nt-tnow)*1000
+    tnow=nt
+
+
+
+def rodrigues(vec_xyz):
+    theta = np.linalg.norm(vec_xyz)
+    k = vec_xyz / theta if theta > 1e-15 else np.zeros(3)
+    k_cross = np.array([[0, -k[2], k[1]], [k[2], 0, -k[0]], [-k[1], k[0], 0]])
+    return np.eye(3) + np.sin(theta) * k_cross + (1 - np.cos(theta)) * (k_cross @ k_cross)
+
+def rvec(rx, ry, rz):
+    Rx = rodrigues(np.array([math.radians(rx), 0, 0]))
+    Ry = rodrigues(np.array([0, math.radians(ry), 0]))
+    Rz = rodrigues(np.array([0, 0, math.radians(rz)]))
+    return np.dot(Rx, Rz, Ry).astype(np.float32)
+
+def tvec(tx, ty, tz):
+    return np.array([tx, ty, tz],dtype=np.float32)
+
+def depthToPointParams(shape, intrinsics, extrinsics, scale=.001, clip=4):
+    # assumes camera is at 0,0,0 facing down (map view) where z is up
+    rows, cols = shape
+    ppx, ppy, fx, fy = intrinsics
+    c, r = np.meshgrid(np.arange(cols), np.arange(rows), sparse=True)
+    projx = -(c.astype(np.float32) - ppx) / fx
+    projy = -(r.astype(np.float32) - ppy) / fy
+
+    # extrinsics are transform from points to bot base (not base to cam)
+    rx, ry, rz,  tx, ty, tz = extrinsics
+    rv = rvec(rx, ry, rz)
+    tv = tvec(tx, ty, tz)
     
-    view_aspect = float(h)/w
+    # if we don't have rotation we want to avoid the extra dot product
+    if np.allclose([rx, ry, rz], 0):
+        rv = None          
 
-    scale = 1/px_size
-
-    # ignore divide by zero for invalid depth
-    with np.errstate(divide='ignore', invalid='ignore'):
-        if ortho:
-            #proj = v[:, :-1]                        * (w*view_aspect*scale, h*scale) + (w/2.0, h/2.0)
-            proj = v[:, :-1]                        * scale + (w/2.0, h/2.0+1*scale)
-        else:
-            proj = v[:, :-1] / v[:, -1, np.newaxis] * (w*view_aspect*scale, h*scale) + (w/2.0, h/2.0)
-
-    # near clipping
-    #znear = 0.03
-    #proj[v[:, 2] < znear] = np.nan
-    return proj
+    return (projx, projy, rv, tv, scale, clip)
 
 
-def view(v):
-    """apply view transformation on vector array"""
-    return np.dot(v - state.pivot, state.rotation) + state.pivot - state.translation
+def depthToPointCloud(depthz, depth_to_point_params):
+    projx, projy, rv, tv, scale, clip = depth_to_point_params
+    depth = depthz.astype(np.float32) 
+    depth *= scale # 1000 mm => 0.001 meters
+    valid = np.ravel( (depth > .02) & (depth < clip)) #remove from the depth image all values above a given value (meters).
+   
+    z = -np.ravel(depth)[valid]
+    x = np.ravel(depth * projx)[valid]
+    y = np.ravel(depth * projy)[valid]
 
+    verts = np.dstack((x, y, z)).reshape(-1, 3)
 
-def line3d(out, pt1, pt2, color=(0x80, 0x80, 0x80), thickness=1):
-    """draw a 3d line from pt1 to pt2"""
-    p0 = project(pt1.reshape(-1, 3))[0]
-    p1 = project(pt2.reshape(-1, 3))[0]
-    if np.isnan(p0).any() or np.isnan(p1).any():
-        return
-    p0 = tuple(p0.astype(int))
-    p1 = tuple(p1.astype(int))
-    rect = (0, 0, out.shape[1], out.shape[0])
-    inside, p0, p1 = cv2.clipLine(rect, p0, p1)
-    if inside:
-        cv2.line(out, p0, p1, color, thickness, cv2.LINE_AA)
+    if rv is not None:
+        np.dot(verts, rv, out=verts)
 
-
-def grid(out, pos, rotation=np.eye(3), size=1, n=10, color=(0x80, 0x80, 0x80)):
-    """draw a grid on xz plane"""
-    pos = np.array(pos)
-    s = size / float(n)
-    s2 = 0.5 * size
-    for i in range(0, n+1):
-        x = -s2 + i*s
-        line3d(out, view(pos + np.dot((x, 0, -s2), rotation)),
-               view(pos + np.dot((x, 0, s2), rotation)), color)
-    for i in range(0, n+1):
-        z = -s2 + i*s
-        line3d(out, view(pos + np.dot((-s2, 0, z), rotation)),
-               view(pos + np.dot((s2, 0, z), rotation)), color)
-
-
-def axes(out, pos, rotation=np.eye(3), size=0.075, thickness=2):
-    """draw 3d axes"""
-    line3d(out, pos, pos +
-           np.dot((0, 0, size), rotation), (0xff, 0, 0), thickness)
-    line3d(out, pos, pos +
-           np.dot((0, size, 0), rotation), (0, 0xff, 0), thickness)
-    line3d(out, pos, pos +
-           np.dot((size, 0, 0), rotation), (0, 0, 0xff), thickness)
-
-
-def frustum(out, intrinsics, color=(0x40, 0x40, 0x40)):
-    """draw camera's frustum"""
-    orig = view([0, 0, 0])
-    w, h = intrinsics.width, intrinsics.height
-
-    for d in range(1, 6, 2):
-        def get_point(x, y):
-            p = rs.rs2_deproject_pixel_to_point(intrinsics, [x, y], d)
-            line3d(out, orig, view(p), color)
-            return p
-
-        top_left = get_point(0, 0)
-        top_right = get_point(w, 0)
-        bottom_right = get_point(w, h)
-        bottom_left = get_point(0, h)
-
-        line3d(out, view(top_left), view(top_right), color)
-        line3d(out, view(top_right), view(bottom_right), color)
-        line3d(out, view(bottom_right), view(bottom_left), color)
-        line3d(out, view(bottom_left), view(top_left), color)
-
-
-def pointcloud(out, verts, texcoords, color, painter=True):
-    """draw point cloud with optional painter's algorithm"""
-    if painter:
-        # Painter's algo, sort points from back to front
-
-        # get reverse sorted indices by z (in view-space)
-        # https://gist.github.com/stevenvo/e3dad127598842459b68
-        
-        s = verts[:, 2].argsort()[::-1]
-        proj = project(verts[s],px_size=state.obst_px_size,ortho=True)
-    else:
-        proj = project(verts)
-
-    if state.scale:
-        proj *= 0.5**state.decimate
-
-    h, w = out.shape[:2]
-
-    # proj now contains 2d image coordinates
-    j, i = proj.astype(np.uint32).T
-
-    # create a mask to ignore out-of-bound indices
-    # we basically do 4 mask each one returning indices of items 
-    # that don't violate the rule. so in the end m is a list of indices
-    # that don't violate any rule. i is list of all y values in verts, j is x
-    im = (i >= 0) & (i < h)
-    jm = (j >= 0) & (j < w)
-    m = im & jm
-
-    if False:
-
-        cw, ch = color.shape[:2][::-1]
-        if painter:
-            # sort texcoord with same indices as above
-            # texcoords are [0..1] and relative to top-left pixel corner,
-            # multiply by size and add 0.5 to center
-            v, u = (texcoords[s] * (cw, ch) + 0.5).astype(np.uint32).T
-        else:
-            v, u = (texcoords * (cw, ch) + 0.5).astype(np.uint32).T
-        # clip texcoords to image
-        np.clip(u, 0, ch-1, out=u)
-        np.clip(v, 0, cw-1, out=v)
-
-        # Multiply the z-values by 200 to create a depth map
-        depth_values = (255-((verts[m][:, 2]+.25)*200).astype(np.uint8))
-        
-        #depth_values = 255-((verts[m][:, 2]-.2)*1000).astype(np.uint8)
-        depth_values[depth_values==255] = 0 
-
-    # Convert each depth value to a 3-element array for B, G, and R channels
-    #depth_values_bgr = np.repeat(depth_values[:, np.newaxis], 3, axis=1)
-    # perform uv-mapping
-    #i and j stay alinged because we mask out an item if it violated on the x or the y
-    # that means we skip legal x values if corresponding y value was bad
-    out[i[m], j[m]] = 255 # depth_values #color[u[m], v[m]]
-    #out= cv2.applyColorMap(out, 9)
-    cv2.imshow('depth', out)
-    #img = out.copy()  
-    #clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
-    #cl = clahe.apply(img,dst=out)
-    #cv2.imshow('Result', cl)
-
-    #ret3,th3 = cv2.threshold(out,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU,dst=out)
-    #cv2.dilate(out,np.ones((2, 2), np.uint8),iterations=6,dst=out)
-    kernel =cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(4,4))
-    cv2.morphologyEx(out,cv2.MORPH_CLOSE,kernel,iterations=2,dst=out)
-    #cv2.morphologyEx(out,cv2.MORPH_OPEN,np.ones((2,2)),iterations=1,dst=out)
+    verts += tv
     
-    #cv2.erode(out,np.ones((5, 5), np.uint8),iterations=3,dst=out)
-    #cv2.adaptiveThreshold(out, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 5, 0,dst=out)
-    #cv2.GaussianBlur(out,(3,3),0,dst=out)
-    
-    #cv2.dilate(out,np.ones((3, 3), np.uint8),dst=out)
+    return verts
 
-    
 
-    #return out
-    #out[i[m], j[m]] = color[u[m], v[m]]
+out = np.empty((512,512,3), dtype=np.uint8) #1px per cm
 
-#out = np.empty((h//4, w//4, 3), dtype=np.uint8)
-#out = np.empty((h*2, w*2), dtype=np.uint8)
-out = np.empty(state.obst_canvas_size, dtype=np.uint8) #1px per cm
+#botmask = cv2.imread('anglerdroid/data/masks/botmask108.png',cv2.IMREAD_GRAYSCALE)
+botmask = cv2.imread('anglerdroid/data/masks/botmask240.png',cv2.IMREAD_GRAYSCALE)
+np.invert(botmask,out=botmask)
 
-botmask = cv2.imread('anglerdroid/data/masks/botmask108.png',cv2.IMREAD_GRAYSCALE)
-cv2.bitwise_not(botmask,botmask)
+depth_data_td = np.zeros((240,424),dtype=np.uint16)
+depth_image_td = np.zeros((240,424),dtype=np.uint8)
+align_image_td = np.zeros((240,424),dtype=np.uint8)
+color_image_td = np.zeros((240,424,3),dtype=np.uint8)
+
+#depth_image_fw = np.zeros_like(botmask,dtype=np.uint16)
+depth_data_fw = np.zeros((60,106),dtype=np.uint16)
+depth_image_fw = np.zeros((60,106),dtype=np.uint8)
+color_image_fw = np.zeros((240,424,3),dtype=np.uint8)
+
+thresh_td = np.zeros_like(depth_image_td,dtype=np.uint8)
+
+#intrinsics = depth_frame_fw.profile.as_video_stream_profile().intrinsics
+intrinsics_td = (209.71139526367188, 116.33296203613281, 209.92787170410156, 209.92787170410156)
+intrinsics_fw = ( 53.14219284057617,  29.85569000244141,  52.77927017211914,  52.77927017211914)
+
+extrinsics_td = (    0.0, 0.0,  0.0, 0.0, 0.0, .9465)
+extrinsics_fw = (25.6-90, 0.0, 90.0, -0.11, -0.025, .4235)
+
+depth2point_td = depthToPointParams(depth_data_td.shape, intrinsics_td, extrinsics_td, scale=.001, clip=.963)
+depth2point_fw = depthToPointParams(depth_data_fw.shape, intrinsics_fw, extrinsics_fw, scale=.001, clip=4.0)
+
+h, w = out.shape[:2] 
+view_aspect = float(h)/w
+px_size=.01
+scale = np.array([1/px_size,-1/px_size], dtype=np.float32)
+center = np.array([w/2.0, h/2.0], dtype=np.float32)
+
+frames_td = pipeline_td.wait_for_frames()
+frames_fw = pipeline_fw.wait_for_frames()
+nframes=0
+now = time.time()
+
+
+
+do_color=True
+paused=False
 
 while True:
-    # Grab camera data
-    if not state.paused:
-
-                # Wait for a coherent pair of frames: depth and color
-        frames_td = pipeline_td.wait_for_frames()
-
-        depth_frame_td = frames_td.get_depth_frame()
-        color_frame_td = frames_td.get_color_frame()
-
-        depth_frame_td = decimate_td.process(depth_frame_td)
-
-        # Grab new intrinsics (may be changed by decimation)
-        depth_intrinsics_td = rs.video_stream_profile(
-            depth_frame_td.profile).get_intrinsics()
-        w_td, h_td = depth_intrinsics_td.width, depth_intrinsics_td.height
-
-        depth_image_td = np.asanyarray(depth_frame_td.get_data())
-        color_image_td = np.asanyarray(color_frame_td.get_data())
-        depth_start_td = -cv2.convertScaleAbs(depth_image_td, alpha=.5,beta=-300)
-        cv2.imshow('td depth scaled',depth_start_td)
-
-        depth_start_td[depth_start_td<10]=255
-
-        floor_td=100
-        ret3,thresh_td = cv2.threshold(depth_start_td,floor_td,255,cv2.THRESH_BINARY,)
-        
-        cv2.imshow("td thresh",thresh_td)
-        cv2.imshow("td threshm",botmask)
-        cv2.bitwise_and(thresh_td,botmask,thresh_td)
-        cv2.imshow("td thresh not bot",thresh_td)
-        
-        # uncomment to write raw map
-        #cv2.imwrite("reference/botmask108.png",thresh_td)
-        #exit()
-
-
-
-
-
-
-        # Wait for a coherent pair of frames: depth and color
-        frames_fw = pipeline_fw.wait_for_frames()
-        depth_frame_fw = frames_fw.get_depth_frame()
-        color_frame_fw = frames_fw.get_color_frame()
-
-        depth_frame_fw = decimate_fw.process(depth_frame_fw)
-
-        # Grab new intrinsics (may be changed by decimation)
-        depth_intrinsics_fw = rs.video_stream_profile(depth_frame_fw.profile).get_intrinsics()
-        w_fw, h_fw = depth_intrinsics_fw.width, depth_intrinsics_fw.height
-
-        depth_image_fw = np.asanyarray(depth_frame_fw.get_data())
-        color_image_fw = np.asanyarray(color_frame_fw.get_data())
-        depth_start_fw = -cv2.convertScaleAbs(depth_image_fw, alpha=.05,beta=0)
-        cv2.imshow('startfw',depth_start_fw)
-
-        #depth_start[depth_start<10]=255
-
-        #ret3,th3 = cv2.threshold(depth_start,114,255,cv2.THRESH_BINARY,)
-        #cv2.imshow("threshfw",th3)
-
-        
-
-        depth_colormap_fw = np.asanyarray(colorizer_fw.colorize(depth_frame_fw).get_data())
-
-        if state.color:
-            mapped_frame_fw, color_source_fw = color_frame_fw, color_image_fw
-        else:
-            mapped_frame_fw, color_source_fw = depth_frame_fw, depth_colormap_fw
-
-        points_fw = pc_fw.calculate(depth_frame_fw)
-        pc_fw.map_to(mapped_frame_fw)
-
-        # Pointcloud data to arrays
-        v, t = points_fw.get_vertices(), points_fw.get_texture_coordinates()
-        #units = points.get_
-        verts = np.asanyarray(v).view(np.float32).reshape(-1, 3)  # xyz
-        texcoords = np.asanyarray(t).view(np.float32).reshape(-1, 2)  # uv
-
-        
-    # Render
-    now = time.time()
-
-    out.fill(0)
-
-    #grid(out, (0, 0.5, 1), size=1, n=10)
-    #frustum(out, depth_intrinsics)
-    #axes(out, view([0, 0, 0]), state.rotation, size=0.1, thickness=1)
-
-    verts = view(verts)
-    
-    # clip the ground
-    verts = verts[verts[:, 2] < .38]
-    #verts = verts[verts[:, 2] > .38]
-
-    if not state.scale:
-        pointcloud(out, verts, texcoords, color_source_fw)
-    else:
-        tmp = np.zeros((h_fw, w_fw), dtype=np.uint8)
-        pointcloud(tmp, verts, texcoords, color_source_fw)
-        tmp = cv2.resize(
-            tmp, out.shape[:2][::-1], interpolation=cv2.INTER_NEAREST)
-        np.putmask(out, tmp > 0, tmp)
-
-    
-
-
-
-    
-    
-    
-    if any(state.mouse_btns):
-        axes(out, view(state.pivot), state.rotation, thickness=4)
-
-    dt = time.time() - now
-
-    cv2.setWindowTitle(
-        state.WIN_NAME, "RealSense (%dx%d) %dFPS (%.2fms) %s" %
-        (w_fw, h_fw, 1.0/dt, dt*1000, "PAUSED" if state.paused else ""))
-
-    cv2.imshow(state.WIN_NAME, out)
+    tnow = time.time()
     key = cv2.waitKey(1)
 
-    if key == ord("r"):
-        state.reset()
+    if key == ord("b"):
+        print("b")
+        #cv2.imwrite("reference/botmask108.png",thresh_td)
+        #cv2.imwrite("reference/botmask240.png",thresh_td)
 
-    if key == ord("p"):
-        state.paused ^= True
+    if key == ord("r"):     state.reset()
 
-    if key == ord("u"):
-        state.color_scale += .1
-    if key == ord("i"):
-        state.color_scale -= .1
+    if key == ord("p"):     
+        print("p")
+        paused = not paused
 
-    if key == ord("d"):
-        state.decimate = (state.decimate + 1) % 3
-        decimate_td.set_option(rs.option.filter_magnitude, 2 ** state.decimate)
-        decimate_fw.set_option(rs.option.filter_magnitude, 2 ** state.decimate)
-
-    if key == ord("z"):
-        state.scale ^= True
+    if key == ord("u"):     print("u")
+    if key == ord("i"):     print("i")
+    if key == ord("d"):     print("d")
+    if key == ord("z"):     print("z")
 
     if key == ord("c"):
-        state.color ^= True
+        print("c")
+        do_color = not do_color
 
     if key == ord("s"):
         cv2.imwrite('./out.png', out)
@@ -511,6 +665,117 @@ while True:
 
     if key in (27, ord("q")) or cv2.getWindowProperty(state.WIN_NAME, cv2.WND_PROP_AUTOSIZE) < 0:
         break
+
+    if any(state.mouse_btns):
+        pass
+
+    if paused:
+        continue
+
+
+
+
+    
+    frames_td = pipeline_td.wait_for_frames()
+    frames_fw = pipeline_fw.wait_for_frames()
+    tstep('wait_for_frames')
+    
+    depth_frame_td = frames_td.get_depth_frame()
+    #depth_frame_td = decimate_td.process(depth_frame_td)
+    #intrinsics = depth_frame_td.profile.as_video_stream_profile().intrinsics
+    depth_frame_fw = frames_fw.get_depth_frame()
+    #depth_frame_fw = decimate_fw.process(depth_frame_fw)
+    #intrinsics = depth_frame_fw.profile.as_video_stream_profile().intrinsics
+
+    depth_data_td[:,:] = np.asanyarray(depth_frame_td.get_data())[::2,::2]
+    depth_data_fw[:,:] = np.asanyarray(depth_frame_fw.get_data())[::4,::4] 
+    
+    depth_image_fw[:,:]=( depth_data_fw )*.05
+    tstep('get depth frames')
+
+    if do_color:
+        color_frame_td = frames_td.get_color_frame()
+        color_frame_fw = frames_fw.get_color_frame()
+        color_image_fw[:,:,:] = np.asanyarray(color_frame_fw.get_data())
+        color_image_td[:,:,:] = np.asanyarray(color_frame_td.get_data())
+        tstep('get color frames')
+    
+    zroi_min = 840
+    zroi_max = 965
+    zroi_scale = 2
+    depth_image_td[:,:] =  255-(depth_data_td.clip(zroi_min,zroi_max) -zroi_min)*zroi_scale
+    tstep('depth_image_td')
+    
+    floor_td=118
+    thresh_td[:,:]=(depth_image_td > floor_td) * np.uint8(255)
+    #thresh_td[:,:]=np.where(depth_image_td>floor_td,255,0)
+    tstep('threshold depth')
+    
+    #cv2.imshow("td thresh",thresh_td)
+    #cv2.imshow("td threshm",botmask)
+    np.bitwise_or(thresh_td,botmask,out=align_image_td)
+    np.bitwise_and(thresh_td,botmask,out=thresh_td)    
+    tstep('show no bot')
+
+    depth_data_td[thresh_td==0]=0 #mask floor and bot before deproject to points
+    verts_td = depthToPointCloud(depth_data_td, depth2point_td)
+    tstep('tdcloud')
+    
+
+    verts_fw = depthToPointCloud(depth_data_fw, depth2point_fw)
+    tstep('get fw verts')
+
+    verts = np.concatenate((verts_td, verts_fw), axis=0)
+
+    verts = np.dot(verts - state.pivot, state.rotation) + state.pivot - state.translation
+
+    # now we're top view so we clip the ground (to view ground: #verts = verts[verts[:, 2] > .38])
+    verts = verts[verts[:, 2] < .38]
+    tstep('thresh fw verts')
+
+    #project 3d vector array to 2d
+    proj = verts[:, :-1] * scale + center #ortho
+    tstep('proj fw verts')
+    
+
+    # make 2d image coordinates and create 4 masks to ignore out-of-bound indices
+    px, py = proj.astype(np.uint32).T
+    m = (py >= 0) & (py < h) & (px >= 0) & (px < w)
+
+    m1=m.copy()
+    m2=m.copy()
+    m1[verts_td.shape[0]:]=False
+    m2[:verts_td.shape[0]]=False
+
+    # that means we skip legal x values if corresponding y value was bad
+    out.fill(0)
+    out[py[m1], px[m1],0] = 255 # depth_values #color[u[m], v[m]]
+    out[py[m2], px[m2],1] = 255 # depth_values #color[u[m], v[m]]
+    tstep('out valid verts')
+    
+
+    #cv2.imshow('td depth scaled',depth_image_td)
+    cv2.imshow("td thresh not bot",thresh_td)  
+    cv2.imshow('startfw',depth_image_fw) 
+    cv2.imshow(state.WIN_NAME, out)
+    cv2.imshow("td align",align_image_td)
+    if do_color:
+        cv2.imshow("col td", color_image_td)
+        cv2.imshow("col fw", color_image_fw)
+    tstep('show images')
+
+    
+    dt = time.time() - now
+    nframes += 1
+    if dt >= 5.0:
+        cv2.setWindowTitle(state.WIN_NAME, "Topdown View %dFPS (%.2fms) " % (math.ceil(nframes/dt), 1000*dt/nframes))
+        
+        now = time.time()
+        nframes = 0
+        print("times")
+        for k,kt in times.items():
+            print(k,kt)
+    
 
 # Stop streaming
 pipeline_td.stop()
